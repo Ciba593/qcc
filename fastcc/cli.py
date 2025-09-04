@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .core.config import ConfigManager
 from .utils.crypto import generate_master_key
-from .utils.ui import select_from_list, print_status, print_header, show_loading
+from .utils.ui import select_from_list, print_status, print_header, show_loading, print_separator, confirm_action
 from .providers.manager import ProvidersManager
 from .providers.browser import (
     open_browser_and_wait, wait_for_input, confirm_continue, 
@@ -356,86 +356,243 @@ def list():
 
 
 @cli.command()
-@click.argument('name')
+@click.argument('name', required=False)
 def use(name):
     """使用指定配置启动Claude Code"""
     try:
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print("❌ 请先运行 'nv init' 初始化配置")
+            print_status("请先运行 'qcc init' 初始化配置", "error")
             return
         
         # 确保存储后端已初始化
         if not config_manager.storage_backend:
             if not config_manager.initialize_storage_backend():
-                print("❌ 存储后端初始化失败")
+                print_status("存储后端初始化失败", "error")
                 return
         
-        if config_manager.apply_profile(name):
-            launch_claude_code()
+        # 从云端同步最新配置
+        config_manager.sync_from_cloud()
+        
+        profiles = config_manager.list_profiles()
+        if not profiles:
+            print_status("暂无配置档案", "warning")
+            print("请先添加配置: qcc add <名称>")
+            return
+        
+        # 如果提供了名称参数，直接使用
+        if name:
+            profile = config_manager.get_profile(name)
+            if not profile:
+                print_status(f"配置档案 '{name}' 不存在", "error")
+                return
+            
+            print_status(f"使用配置: {name}", "loading")
+            if config_manager.apply_profile(name):
+                launch_claude_code()
+            return
+        
+        # 交互式选择配置
+        print_header("选择配置启动 Claude Code")
+        
+        # 获取默认配置用于排序
+        default_profile = config_manager.get_default_profile()
+        default_index = 0
+        
+        if default_profile:
+            for i, profile in enumerate(profiles):
+                if profile.name == default_profile.name:
+                    default_index = i
+                    break
+        
+        # 构建选择列表，包含详细信息
+        profile_names = []
+        for profile in profiles:
+            desc = f" - {profile.description}" if profile.description else ""
+            last_used = profile.last_used or "从未使用"
+            if profile.last_used:
+                last_used = profile.last_used[:10]
+            is_default = " [默认]" if default_profile and profile.name == default_profile.name else ""
+            profile_names.append(f"{profile.name}{desc}{is_default} (最后使用: {last_used})")
+        
+        # 用户选择
+        selected_index = select_from_list(
+            profile_names,
+            "选择配置档案启动 Claude Code",
+            timeout=5,
+            default_index=default_index
+        )
+        
+        if selected_index >= 0:
+            selected_profile = profiles[selected_index]
+            print_status(f"使用配置: {selected_profile.name}", "loading")
+            if config_manager.apply_profile(selected_profile.name):
+                launch_claude_code()
+        else:
+            print_status("操作取消", "warning")
         
     except Exception as e:
-        print(f"❌ 使用配置失败: {e}")
+        print_status(f"使用配置失败: {e}", "error")
 
 
 @cli.command()
-@click.argument('name')
+@click.argument('name', required=False)
 def default(name):
     """设置默认配置档案"""
     try:
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print("❌ 请先运行 'nv init' 初始化配置")
+            print_status("请先运行 'qcc init' 初始化配置", "error")
             return
         
         # 确保存储后端已初始化
         if not config_manager.storage_backend:
             if not config_manager.initialize_storage_backend():
-                print("❌ 存储后端初始化失败")
+                print_status("存储后端初始化失败", "error")
                 return
         
-        config_manager.set_default_profile(name)
+        # 从云端同步最新配置
+        config_manager.sync_from_cloud()
+        
+        profiles = config_manager.list_profiles()
+        if not profiles:
+            print_status("暂无配置档案", "warning")
+            print("请先添加配置: qcc add <名称>")
+            return
+        
+        # 如果提供了名称参数，直接使用
+        if name:
+            if config_manager.get_profile(name):
+                config_manager.set_default_profile(name)
+                print_status(f"已设置默认配置: {name}", "success")
+            else:
+                print_status(f"配置档案 '{name}' 不存在", "error")
+            return
+        
+        # 交互式选择
+        print_header("设置默认配置档案")
+        
+        # 获取当前默认配置
+        current_default = config_manager.get_default_profile()
+        default_index = 0
+        
+        if current_default:
+            for i, profile in enumerate(profiles):
+                if profile.name == current_default.name:
+                    default_index = i
+                    break
+        
+        # 构建选择列表
+        profile_names = []
+        for profile in profiles:
+            desc = f" - {profile.description}" if profile.description else ""
+            is_current_default = " [当前默认]" if current_default and profile.name == current_default.name else ""
+            profile_names.append(f"{profile.name}{desc}{is_current_default}")
+        
+        # 用户选择
+        selected_index = select_from_list(
+            profile_names,
+            "选择要设置为默认的配置档案",
+            timeout=10,
+            default_index=default_index
+        )
+        
+        if selected_index >= 0:
+            selected_profile = profiles[selected_index]
+            config_manager.set_default_profile(selected_profile.name)
+            print_status(f"已设置默认配置: {selected_profile.name}", "success")
+        else:
+            print_status("操作取消", "warning")
         
     except Exception as e:
-        print(f"❌ 设置默认配置失败: {e}")
+        print_status(f"设置默认配置失败: {e}", "error")
 
 
 @cli.command()
-@click.argument('name')
+@click.argument('name', required=False)
 def remove(name):
     """删除配置档案"""
     try:
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print("❌ 请先运行 'nv init' 初始化配置")
+            print_status("请先运行 'qcc init' 初始化配置", "error")
             return
         
         # 确保存储后端已初始化
         if not config_manager.storage_backend:
             if not config_manager.initialize_storage_backend():
-                print("❌ 存储后端初始化失败")
+                print_status("存储后端初始化失败", "error")
                 return
         
-        profile = config_manager.get_profile(name)
-        if not profile:
-            print(f"❌ 配置档案 '{name}' 不存在")
+        # 从云端同步最新配置
+        config_manager.sync_from_cloud()
+        
+        profiles = config_manager.list_profiles()
+        if not profiles:
+            print_status("暂无配置档案", "warning")
             return
         
-        print(f"⚠️  即将删除配置档案: {name}")
-        print(f"   描述: {profile.description}")
-        print(f"   BASE_URL: {profile.base_url}")
+        # 如果提供了名称参数，直接删除
+        if name:
+            profile = config_manager.get_profile(name)
+            if not profile:
+                print_status(f"配置档案 '{name}' 不存在", "error")
+                return
+            
+            print_status(f"即将删除配置档案: {name}", "warning")
+            print(f"   描述: {profile.description}")
+            print(f"   BASE_URL: {profile.base_url}")
+            
+            if confirm_action("确认删除？", default=False):
+                config_manager.remove_profile(name)
+                print_status(f"配置档案 '{name}' 已删除", "success")
+            else:
+                print_status("操作取消", "info")
+            return
         
-        confirm = input("\n确认删除? (y/N): ").strip().lower()
-        if confirm in ['y', 'yes', '是']:
-            config_manager.remove_profile(name)
+        # 交互式选择要删除的配置
+        print_header("删除配置档案")
+        
+        # 构建选择列表，包含详细信息
+        profile_names = []
+        for profile in profiles:
+            desc = f" - {profile.description}" if profile.description else ""
+            last_used = profile.last_used or "从未使用"
+            if profile.last_used:
+                last_used = profile.last_used[:10]
+            profile_names.append(f"{profile.name}{desc} (最后使用: {last_used})")
+        
+        # 用户选择
+        selected_index = select_from_list(
+            profile_names,
+            "选择要删除的配置档案",
+            timeout=15,
+            default_index=0
+        )
+        
+        if selected_index >= 0:
+            selected_profile = profiles[selected_index]
+            
+            # 显示详细信息并确认
+            print_separator()
+            print_status(f"即将删除配置档案: {selected_profile.name}", "warning")
+            print(f"   描述: {selected_profile.description or '无'}")
+            print(f"   BASE_URL: {selected_profile.base_url}")
+            print(f"   最后使用: {selected_profile.last_used or '从未使用'}")
+            
+            if confirm_action("确认删除？此操作不可恢复", default=False):
+                config_manager.remove_profile(selected_profile.name)
+                print_status(f"配置档案 '{selected_profile.name}' 已删除", "success")
+            else:
+                print_status("操作取消", "info")
         else:
-            print("❌ 操作取消")
+            print_status("操作取消", "warning")
             
     except KeyboardInterrupt:
-        print("\n❌ 操作取消")
+        print_status("操作取消", "warning")
     except Exception as e:
         print(f"❌ 删除配置失败: {e}")
 
