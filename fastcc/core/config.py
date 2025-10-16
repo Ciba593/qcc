@@ -479,6 +479,7 @@ class ConfigManager:
             
             claude_config["env"]["ANTHROPIC_BASE_URL"] = profile.base_url
             claude_config["env"]["ANTHROPIC_API_KEY"] = profile.api_key
+            claude_config["env"]["ANTHROPIC_AUTH_TOKEN"] = profile.api_key  # 同时填充 AUTH_TOKEN
             claude_config["apiKeyHelper"] = f"echo '{profile.api_key}'"
             
             # 写入配置文件
