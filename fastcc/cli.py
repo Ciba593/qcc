@@ -909,6 +909,83 @@ def fc():
         print(f"❌ 厂商配置失败: {e}")
 
 
+# ========== Proxy 命令组（新增） ==========
+
+@cli.group()
+def proxy():
+    """代理服务管理命令"""
+    pass
+
+
+@proxy.command('start')
+@click.option('--host', default='127.0.0.1', help='监听地址')
+@click.option('--port', default=7860, help='监听端口')
+def proxy_start(host, port):
+    """启动代理服务器"""
+    try:
+        import asyncio
+        from .proxy.server import ProxyServer
+        from .proxy.load_balancer import LoadBalancer
+        from .core.config import ConfigManager
+
+        print_header("QCC 代理服务器")
+
+        # 初始化配置管理器
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        # 检查是否有配置
+        profiles = config_manager.list_profiles()
+        if not profiles:
+            print_status("暂无配置档案", "warning")
+            print("请先添加配置: qcc add <名称>")
+            return
+
+        # 初始化负载均衡器
+        load_balancer = LoadBalancer(strategy="weighted")
+
+        # 初始化代理服务器
+        server = ProxyServer(
+            host=host,
+            port=port,
+            config_manager=config_manager,
+            load_balancer=load_balancer
+        )
+
+        # 运行服务器
+        print(f"正在启动代理服务器 {host}:{port}...")
+        print(f"")
+        print(f"💡 使用方法:")
+        print(f"   1. 设置环境变量:")
+        print(f"      export ANTHROPIC_BASE_URL=http://{host}:{port}")
+        print(f"      export ANTHROPIC_API_KEY=proxy-managed")
+        print(f"")
+        print(f"   2. 启动 Claude Code:")
+        print(f"      claude")
+        print(f"")
+        print(f"按 Ctrl+C 停止服务器")
+        print(f"")
+
+        asyncio.run(server.start())
+
+    except KeyboardInterrupt:
+        print("\n收到停止信号")
+    except Exception as e:
+        print_status(f"启动代理服务器失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
+@proxy.command('status')
+def proxy_status():
+    """查看代理服务器状态"""
+    print_status("代理服务器状态查看功能开发中", "info")
+    print("TODO: 实现进程检查和状态显示")
+
+
 def main():
     """主入口函数"""
     try:
