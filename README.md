@@ -30,6 +30,7 @@
 - 🛡️ 端到端加密存储
 - 🔑 用户自主数据控制
 - 🚫 无中心化存储风险
+- 🔒 敏感信息保护，无硬编码密钥
 
 </td>
 <td width="50%">
@@ -43,6 +44,7 @@
 - 📦 支持 `uvx` 零安装运行
 - 🎨 现代 Python 包管理
 - 🔧 模块化设计，易于扩展
+- 🖥️ Rich 终端UI，跨平台交互体验
 
 </td>
 </tr>
@@ -261,13 +263,15 @@ graph TD
 
 ```bash
 # 🚀 快速搭建开发环境
-git clone <repository>
+git clone https://github.com/lghguge520/qcc.git
 cd qcc
-python -m venv fastcc_env
-source fastcc_env/bin/activate  # Windows: fastcc_env\Scripts\activate
 
-# 📦 安装开发依赖
-pip install -e .
+# 📦 创建虚拟环境（必须使用 virtualenv，命名为 venv）
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 📥 安装开发依赖
+pip install -e ".[dev]"
 
 # 🧪 运行开发版本
 python -m fastcc.cli --help
@@ -276,26 +280,31 @@ python -m fastcc.cli --help
 ### 🧪 测试套件
 
 ```bash
-# 🔬 运行测试
-source fastcc_test_env/bin/activate
+# ⚠️ 重要：必须先测试再发布，使用 uvx 进行测试
+uvx --from . qcc --help  # 使用 uvx 测试本地包
 
-# 🎯 单个测试
-python3 tests/test_providers.py        # 厂商配置测试
-python3 tests/test_fc_command.py       # FC 命令测试
-python3 tests/test_simplified_fc.py    # 简化流程测试
+# 🔬 运行单元测试
+source venv/bin/activate
+pytest tests/ -v
 
-# 🎪 全部测试
-python3 -m pytest tests/ -v
+# 🎯 单个测试文件
+pytest tests/test_providers.py -v     # 厂商配置测试
+pytest tests/test_fc_command.py -v    # FC 命令测试
+pytest tests/test_simplified_fc.py -v # 简化流程测试
 ```
 
 ### 📦 构建发布
 
 ```bash
-# 🔨 构建包
+# ⚠️ 发布前必须完成测试
+# 1️⃣ 使用 uvx 测试
+uvx --from . qcc --help
+
+# 2️⃣ 构建包
 pip install build twine
 python -m build
 
-# 🚀 发布到 PyPI
+# 3️⃣ 发布到 PyPI
 python -m twine upload dist/*
 ```
 
@@ -317,7 +326,7 @@ python -m twine upload dist/*
 
 | 🐍 Python | 📦 依赖 | 🖥️ 平台 |
 |-----------|---------|---------|
-| **3.7+** | click, requests, cryptography | Windows, macOS, Linux |
+| **3.7+** | click, requests, cryptography, rich, prompt_toolkit | Windows, macOS, Linux |
 
 </div>
 
