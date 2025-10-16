@@ -16,35 +16,76 @@ from ..utils.crypto import CryptoManager, derive_user_key
 
 
 class ConfigProfile:
-    """配置档案"""
-    
-    def __init__(self, name: str, description: str = "", 
-                 base_url: str = "", api_key: str = "", 
-                 created_at: Optional[str] = None, 
-                 last_used: Optional[str] = None):
+    """配置档案（扩展支持多 endpoint）"""
+
+    def __init__(self, name: str, description: str = "",
+                 base_url: str = "", api_key: str = "",
+                 created_at: Optional[str] = None,
+                 last_used: Optional[str] = None,
+                 endpoints: Optional[List] = None,
+                 priority: str = "primary",
+                 enabled: bool = True):
         self.name = name
         self.description = description
+        # 保持向后兼容：传统单 endpoint 字段
         self.base_url = base_url
         self.api_key = api_key
+        # 新增：多 endpoint 支持
+        self.endpoints = endpoints or []
+        self.priority = priority  # primary, secondary, fallback
+        self.enabled = enabled
         self.created_at = created_at or datetime.now().isoformat()
         self.last_used = last_used
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return {
+        data = {
             'name': self.name,
             'description': self.description,
-            'base_url': self.base_url,
-            'api_key': self.api_key,
+            'priority': self.priority,
+            'enabled': self.enabled,
             'created_at': self.created_at,
             'last_used': self.last_used
         }
-    
+
+        # 如果有 endpoints，保存 endpoints 列表
+        if self.endpoints:
+            data['endpoints'] = [ep.to_dict() for ep in self.endpoints]
+            # 为了向后兼容，同时保存第一个 endpoint 的数据
+            if self.endpoints:
+                data['base_url'] = self.endpoints[0].base_url
+                data['api_key'] = self.endpoints[0].api_key
+        else:
+            # 如果没有 endpoints，使用传统字段
+            data['base_url'] = self.base_url
+            data['api_key'] = self.api_key
+
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ConfigProfile':
         """从字典创建"""
-        return cls(**data)
-    
+        # 先创建基础的 profile
+        profile = cls(
+            name=data['name'],
+            description=data.get('description', ''),
+            base_url=data.get('base_url', ''),
+            api_key=data.get('api_key', ''),
+            priority=data.get('priority', 'primary'),
+            enabled=data.get('enabled', True),
+            created_at=data.get('created_at'),
+            last_used=data.get('last_used')
+        )
+
+        # 如果有 endpoints 数据，加载它们
+        if 'endpoints' in data and data['endpoints']:
+            from .endpoint import Endpoint
+            profile.endpoints = [
+                Endpoint.from_dict(ep_data) for ep_data in data['endpoints']
+            ]
+
+        return profile
+
     def update_last_used(self):
         """更新最后使用时间"""
         self.last_used = datetime.now().isoformat()
@@ -458,50 +499,163 @@ class ConfigManager:
         if not profile:
             print(f"❌ 配置档案 '{name}' 不存在")
             return False
-        
+
         try:
             # 更新Claude Code配置文件
             claude_config_dir = Path.home() / ".claude"
             claude_config_dir.mkdir(exist_ok=True)
-            
+
             claude_config_file = claude_config_dir / "settings.json"
-            
+
             # 读取现有配置
             if claude_config_file.exists():
                 with open(claude_config_file, 'r') as f:
                     claude_config = json.load(f)
             else:
                 claude_config = {"env": {}, "permissions": {"allow": [], "deny": []}}
-            
+
             # 更新API配置
             if "env" not in claude_config:
                 claude_config["env"] = {}
-            
-            claude_config["env"]["ANTHROPIC_BASE_URL"] = profile.base_url
-            claude_config["env"]["ANTHROPIC_API_KEY"] = profile.api_key
-            claude_config["env"]["ANTHROPIC_AUTH_TOKEN"] = profile.api_key  # 同时填充 AUTH_TOKEN
-            claude_config["apiKeyHelper"] = f"echo '{profile.api_key}'"
-            
+
+            # 优先使用第一个 endpoint，否则使用传统字段
+            if profile.endpoints:
+                first_endpoint = profile.endpoints[0]
+                base_url = first_endpoint.base_url
+                api_key = first_endpoint.api_key
+            else:
+                base_url = profile.base_url
+                api_key = profile.api_key
+
+            claude_config["env"]["ANTHROPIC_BASE_URL"] = base_url
+            claude_config["env"]["ANTHROPIC_API_KEY"] = api_key
+            claude_config["env"]["ANTHROPIC_AUTH_TOKEN"] = api_key  # 同时填充 AUTH_TOKEN
+            claude_config["apiKeyHelper"] = f"echo '{api_key}'"
+
             # 写入配置文件
             with open(claude_config_file, 'w') as f:
                 json.dump(claude_config, f, indent=2, ensure_ascii=False)
-            
+
             # 设置文件权限
             claude_config_file.chmod(0o600)
-            
+
             # 更新最后使用时间
             profile.update_last_used()
-            
+
             print(f"✅ 已应用配置: {name}")
-            print(f"   BASE_URL: {profile.base_url}")
-            print(f"   API_KEY: {profile.api_key[:10]}...{profile.api_key[-4:]}")
-            
+            print(f"   BASE_URL: {base_url}")
+            print(f"   API_KEY: {api_key[:10]}...{api_key[-4:]}")
+            if profile.endpoints:
+                print(f"   Endpoints: {len(profile.endpoints)} 个")
+
             # 保存更新后的使用时间
+            self._save_local_cache()
             if self.settings['auto_sync']:
                 self.sync_to_cloud()
-            
+
             return True
-            
+
         except Exception as e:
             print(f"❌ 应用配置失败: {e}")
             return False
+
+    # ========== Endpoint 管理方法（新增） ==========
+
+    def add_endpoint_to_profile(self, profile_name: str, endpoint) -> bool:
+        """为配置添加 endpoint
+
+        Args:
+            profile_name: 配置名称
+            endpoint: Endpoint 实例
+
+        Returns:
+            是否成功
+        """
+        profile = self.get_profile(profile_name)
+        if not profile:
+            print(f"❌ 配置 '{profile_name}' 不存在")
+            return False
+
+        # 初始化 endpoints 列表
+        if not profile.endpoints:
+            profile.endpoints = []
+
+        profile.endpoints.append(endpoint)
+
+        print(f"✅ 已为配置 '{profile_name}' 添加 endpoint: {endpoint.id}")
+
+        # 保存
+        self._save_local_cache()
+        if self.settings['auto_sync']:
+            self.sync_to_cloud()
+
+        return True
+
+    def remove_endpoint_from_profile(self, profile_name: str, endpoint_id: str) -> bool:
+        """从配置中删除 endpoint
+
+        Args:
+            profile_name: 配置名称
+            endpoint_id: Endpoint ID
+
+        Returns:
+            是否成功
+        """
+        profile = self.get_profile(profile_name)
+        if not profile:
+            print(f"❌ 配置 '{profile_name}' 不存在")
+            return False
+
+        if not profile.endpoints:
+            print(f"❌ 配置 '{profile_name}' 没有 endpoints")
+            return False
+
+        # 查找并删除
+        for i, ep in enumerate(profile.endpoints):
+            if ep.id == endpoint_id:
+                del profile.endpoints[i]
+                print(f"✅ 已删除 endpoint: {endpoint_id}")
+
+                # 保存
+                self._save_local_cache()
+                if self.settings['auto_sync']:
+                    self.sync_to_cloud()
+
+                return True
+
+        print(f"❌ 未找到 endpoint: {endpoint_id}")
+        return False
+
+    def get_all_endpoints(self) -> List:
+        """获取所有配置的所有 endpoint
+
+        Returns:
+            所有 endpoint 的列表
+        """
+        all_endpoints = []
+
+        for profile in self.profiles.values():
+            if profile.endpoints:
+                all_endpoints.extend(profile.endpoints)
+
+        return all_endpoints
+
+    def save_profile(self, profile: ConfigProfile) -> bool:
+        """保存配置档案（支持 endpoints）
+
+        Args:
+            profile: 配置档案实例
+
+        Returns:
+            是否成功
+        """
+        self.profiles[profile.name] = profile
+
+        print(f"✅ 已保存配置: {profile.name}")
+
+        # 保存到本地和云端
+        self._save_local_cache()
+        if self.settings['auto_sync']:
+            self.sync_to_cloud()
+
+        return True
