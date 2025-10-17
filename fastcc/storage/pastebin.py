@@ -81,7 +81,7 @@ class PastebinBackend(StorageBackend):
             
             # 这里需要真实的Pastebin API实现
             # 作为示例，我们模拟成功
-            print("✅ 配置已同步到云端 (Pastebin)")
+            print("[OK] 配置已同步到云端 (Pastebin)")
             return True
             
         except Exception as e:
@@ -94,7 +94,7 @@ class PastebinBackend(StorageBackend):
         
         try:
             # 模拟从Pastebin加载
-            print("✅ 从云端加载配置 (Pastebin)")
+            print("[OK] 从云端加载配置 (Pastebin)")
             return {}
             
         except Exception as e:
@@ -103,7 +103,7 @@ class PastebinBackend(StorageBackend):
     def delete_config(self) -> bool:
         """删除配置数据"""
         try:
-            print("✅ 已删除云端配置 (Pastebin)")
+            print("[OK] 已删除云端配置 (Pastebin)")
             self.paste_key = None
             self._save_local_config()
             return True

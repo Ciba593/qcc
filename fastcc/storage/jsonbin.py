@@ -92,7 +92,7 @@ class JSONBinBackend(StorageBackend):
                     self._save_local_config()
             
             if response.status_code == 200:
-                print("✅ 配置已同步到云端 (JSONBin)")
+                print("[OK] 配置已同步到云端 (JSONBin)")
                 return True
             else:
                 raise StorageError(f"API请求失败: {response.status_code} - {response.text}")
@@ -113,7 +113,7 @@ class JSONBinBackend(StorageBackend):
             
             if response.status_code == 200:
                 result = response.json()
-                print("✅ 从云端加载配置 (JSONBin)")
+                print("[OK] 从云端加载配置 (JSONBin)")
                 return result.get('record', {})
             elif response.status_code == 404:
                 raise ConfigNotFoundError("配置文件不存在")
@@ -137,7 +137,7 @@ class JSONBinBackend(StorageBackend):
             if response.status_code == 200:
                 self.bin_id = None
                 self._save_local_config()
-                print("✅ 已删除云端配置 (JSONBin)")
+                print("[OK] 已删除云端配置 (JSONBin)")
                 return True
             else:
                 raise StorageError(f"删除失败: {response.status_code}")

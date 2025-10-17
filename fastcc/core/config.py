@@ -16,35 +16,92 @@ from ..utils.crypto import CryptoManager, derive_user_key
 
 
 class ConfigProfile:
-    """配置档案"""
-    
-    def __init__(self, name: str, description: str = "", 
-                 base_url: str = "", api_key: str = "", 
-                 created_at: Optional[str] = None, 
-                 last_used: Optional[str] = None):
+    """配置档案（扩展支持多 endpoint）"""
+
+    def __init__(self, name: str, description: str = "",
+                 base_url: str = "", api_key: str = "",
+                 created_at: Optional[str] = None,
+                 last_used: Optional[str] = None,
+                 endpoints: Optional[List] = None,
+                 priority: str = "primary",
+                 enabled: bool = True):
         self.name = name
         self.description = description
+        # 保持向后兼容：传统单 endpoint 字段
         self.base_url = base_url
         self.api_key = api_key
+        # 新增：多 endpoint 支持
+        self.endpoints = endpoints or []
+        self.priority = priority  # primary, secondary, fallback
+        self.enabled = enabled
         self.created_at = created_at or datetime.now().isoformat()
         self.last_used = last_used
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
-        return {
+        data = {
             'name': self.name,
             'description': self.description,
-            'base_url': self.base_url,
-            'api_key': self.api_key,
+            'priority': self.priority,
+            'enabled': self.enabled,
             'created_at': self.created_at,
             'last_used': self.last_used
         }
-    
+
+        # 如果有 endpoints，保存 endpoints 列表
+        if self.endpoints:
+            data['endpoints'] = [ep.to_dict() for ep in self.endpoints]
+            # 为了向后兼容，同时保存第一个 endpoint 的数据
+            if self.endpoints:
+                data['base_url'] = self.endpoints[0].base_url
+                data['api_key'] = self.endpoints[0].api_key
+        else:
+            # 如果没有 endpoints，使用传统字段
+            data['base_url'] = self.base_url
+            data['api_key'] = self.api_key
+
+        return data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ConfigProfile':
-        """从字典创建"""
-        return cls(**data)
-    
+        """从字典创建（兼容旧版本）"""
+        # 构建参数字典，只包含旧版本支持的核心参数
+        init_params = {
+            'name': data['name'],
+            'description': data.get('description', ''),
+            'base_url': data.get('base_url', ''),
+            'api_key': data.get('api_key', ''),
+            'created_at': data.get('created_at'),
+            'last_used': data.get('last_used')
+        }
+
+        # 如果当前版本支持新参数，则添加它们
+        # 使用 try-except 来检测是否支持新参数
+        import inspect
+        sig = inspect.signature(cls.__init__)
+        if 'endpoints' in sig.parameters:
+            init_params['endpoints'] = None  # 稍后再设置
+        if 'priority' in sig.parameters:
+            init_params['priority'] = data.get('priority', 'primary')
+        if 'enabled' in sig.parameters:
+            init_params['enabled'] = data.get('enabled', True)
+
+        # 创建 profile 实例
+        profile = cls(**init_params)
+
+        # 如果有 endpoints 数据，加载它们
+        if 'endpoints' in data and data['endpoints']:
+            try:
+                from .endpoint import Endpoint
+                profile.endpoints = [
+                    Endpoint.from_dict(ep_data) for ep_data in data['endpoints']
+                ]
+            except (ImportError, AttributeError):
+                # 旧版本没有 Endpoint 类，跳过
+                pass
+
+        return profile
+
     def update_last_used(self):
         """更新最后使用时间"""
         self.last_used = datetime.now().isoformat()
@@ -118,12 +175,12 @@ class ConfigManager:
                 return self._init_backend_by_type(backend_type)
         
         # 首次使用或强制选择时，询问用户偏好
-        print("🔧 选择同步方式：")
+        print("[+] 选择同步方式：")
         print("1. GitHub跨平台同步（推荐）- Windows、Mac、Linux通用")
         print("2. 本地云盘同步 - 使用iCloud/OneDrive等")
         print("3. 仅本地存储 - 不同步")
         print("")
-        print("💡 提示：选择后会记住您的偏好，可用 'nv config' 命令更改")
+        print("[?] 提示：选择后会记住您的偏好，可用 'nv config' 命令更改")
         
         try:
             choice = input("请选择 (1-3, 默认1): ").strip() or "1"
@@ -139,24 +196,25 @@ class ConfigManager:
                 github_backend = GitHubSimpleBackend()
                 self.storage_backend = github_backend
                 self.user_id = f"github:{github_backend.user_id}"
-                print(f"🔧 使用GitHub跨平台同步: {github_backend.user_id}")
+                print(f"[+] 使用GitHub跨平台同步: {github_backend.user_id}")
                 return True
             elif backend_type == "cloud":
                 cloud_backend = CloudFileBackend()
                 if cloud_backend.is_available():
                     self.storage_backend = cloud_backend
                     self.user_id = f"cloud:{os.getenv('USER', 'unknown')}"
-                    print(f"🔧 使用云盘存储: {cloud_backend.backend_name}")
+                    print(f"[+] 使用云盘存储: {cloud_backend.backend_name}")
                     return True
                 else:
-                    print("⚠️  云盘不可用，回退到本地存储")
+                    print("[!]  云盘不可用，回退到本地存储")
                     return self._init_and_save_choice("3")
             elif backend_type == "local":
                 self.user_id = f"local:{os.getenv('USER', 'unknown')}"
-                print("🔧 使用本地存储")
+                self.storage_backend = None  # 明确设置为 None 表示本地模式
+                print("[+] 使用本地存储（无云端同步）")
                 return True
         except Exception as e:
-            print(f"⚠️  存储后端初始化失败: {e}")
+            print(f"[!]  存储后端初始化失败: {e}")
             print("回退到本地存储")
             return self._init_and_save_choice("3")
         
@@ -170,14 +228,14 @@ class ConfigManager:
         if choice == "1":
             # GitHub跨平台同步
             try:
-                print("🔧 初始化GitHub跨平台同步...")
+                print("[+] 初始化GitHub跨平台同步...")
                 github_backend = GitHubSimpleBackend()
                 self.storage_backend = github_backend
                 self.user_id = f"github:{github_backend.user_id}"
                 backend_type = "github"
                 success = True
             except Exception as e:
-                print(f"⚠️  GitHub初始化失败: {e}")
+                print(f"[!]  GitHub初始化失败: {e}")
                 print("回退到云盘存储...")
                 choice = "2"
         
@@ -185,19 +243,19 @@ class ConfigManager:
             # 云盘文件存储
             cloud_backend = CloudFileBackend()
             if cloud_backend.is_available():
-                print(f"🔧 使用云盘存储: {cloud_backend.backend_name}")
+                print(f"[+] 使用云盘存储: {cloud_backend.backend_name}")
                 self.storage_backend = cloud_backend
                 self.user_id = f"cloud:{os.getenv('USER', 'unknown')}"
                 backend_type = "cloud"
                 success = True
             else:
-                print("⚠️  未检测到云盘，使用本地存储")
+                print("[!]  未检测到云盘，使用本地存储")
                 choice = "3"
         
         if choice == "3" or not success:
             # 本地存储
-            print("🔧 使用本地存储")
-            print("💡 配置保存在本地 ~/.fastcc/")
+            print("[+] 使用本地存储")
+            print("[?] 配置保存在本地 ~/.fastcc/")
             print("📁 如需跨设备同步，可将此文件夹放入云盘并创建软链接")
             print("   例如：ln -s ~/Dropbox/FastCC ~/.fastcc")
             self.user_id = f"local:{os.getenv('USER', 'unknown')}"
@@ -209,19 +267,19 @@ class ConfigManager:
             self.settings['storage_backend_type'] = backend_type
             self.settings['storage_initialized'] = True
             self._save_local_cache()
-            print(f"✅ 已保存同步方式偏好: {backend_type}")
+            print(f"[OK] 已保存同步方式偏好: {backend_type}")
         
         return success
     
     def initialize_github_backend(self) -> bool:
         """初始化GitHub后端"""
         try:
-            print("🔧 初始化GitHub存储后端...")
+            print("[+] 初始化GitHub存储后端...")
             
             # 获取GitHub访问令牌
             access_token = authenticate_github()
             if not access_token:
-                print("❌ GitHub认证失败")
+                print("[X] GitHub认证失败")
                 return False
             
             # 创建GitHub Gist存储后端
@@ -231,7 +289,7 @@ class ConfigManager:
             user_info = self.storage_backend.get_user_info()
             if user_info:
                 self.user_id = f"github:{user_info['login']}"
-                print(f"✅ 已连接到GitHub账户: {user_info['login']}")
+                print(f"[OK] 已连接到GitHub账户: {user_info['login']}")
             
             # 初始化加密管理器
             if self.settings['encryption_enabled']:
@@ -244,7 +302,7 @@ class ConfigManager:
             return True
             
         except Exception as e:
-            print(f"❌ 初始化GitHub后端失败: {e}")
+            print(f"[X] 初始化GitHub后端失败: {e}")
             return False
     
     def sync_from_cloud(self) -> bool:
@@ -253,11 +311,11 @@ class ConfigManager:
             return True  # 本地存储模式，直接返回成功
         
         try:
-            print("☁️ 从云端同步配置...")
+            print("[~] 从云端同步配置...")
             
             config_data = self.storage_backend.load_config()
             if not config_data:
-                print("📝 云端暂无配置数据")
+                print("[=] 云端暂无配置数据")
                 return True
             
             # 解密配置数据
@@ -277,7 +335,7 @@ class ConfigManager:
             if 'settings' in config_data:
                 self.settings.update(config_data['settings'])
             
-            print(f"✅ 已同步 {len(self.profiles)} 个配置档案")
+            print(f"[OK] 已同步 {len(self.profiles)} 个配置档案")
             
             # 保存到本地缓存
             self._save_local_cache()
@@ -285,16 +343,17 @@ class ConfigManager:
             return True
             
         except Exception as e:
-            print(f"❌ 从云端同步失败: {e}")
+            print(f"[X] 从云端同步失败: {e}")
             return False
     
     def sync_to_cloud(self) -> bool:
         """同步配置到云端"""
         if not self.storage_backend:
+            print("[i] 本地存储模式，无需云端同步")
             return True  # 本地存储模式，直接返回成功
         
         try:
-            print("☁️ 同步配置到云端...")
+            print("[~] 同步配置到云端...")
             
             # 准备配置数据
             profiles_data = {name: profile.to_dict() for name, profile in self.profiles.items()}
@@ -316,29 +375,29 @@ class ConfigManager:
             success = self.storage_backend.save_config(config_data)
             
             if success:
-                print("✅ 配置已同步到云端")
+                print("[OK] 配置已同步到云端")
                 self._save_local_cache()
             else:
-                print("❌ 同步到云端失败")
+                print("[X] 同步到云端失败")
             
             return success
             
         except Exception as e:
             # 检查是否是权限问题
             if "403" in str(e) and "Forbidden" in str(e):
-                print("⚠️  云同步失败：GitHub权限不足")
-                print("📋 解决方案：")
+                print("[!]  云同步失败：GitHub权限不足")
+                print("[L] 解决方案：")
                 print("1. 重新运行 'nv init' 重新获取认证")
                 print("2. 如果问题持续，请尝试禁用自动同步：")
                 print("   编辑 ~/.fastcc/cache.json，设置 'auto_sync': false")
             else:
-                print(f"❌ 同步到云端失败: {e}")
+                print(f"[X] 同步到云端失败: {e}")
             return False
     
     def add_profile(self, name: str, description: str, base_url: str, api_key: str) -> bool:
         """添加配置档案"""
         if name in self.profiles:
-            print(f"❌ 配置档案 '{name}' 已存在")
+            print(f"[X] 配置档案 '{name}' 已存在")
             return False
         
         profile = ConfigProfile(name, description, base_url, api_key)
@@ -348,7 +407,7 @@ class ConfigManager:
         if not self.settings['default_profile']:
             self.settings['default_profile'] = name
         
-        print(f"✅ 已添加配置档案: {name}")
+        print(f"[OK] 已添加配置档案: {name}")
         
         # 保存到本地缓存
         self._save_local_cache()
@@ -362,7 +421,7 @@ class ConfigManager:
     def remove_profile(self, name: str) -> bool:
         """删除配置档案"""
         if name not in self.profiles:
-            print(f"❌ 配置档案 '{name}' 不存在")
+            print(f"[X] 配置档案 '{name}' 不存在")
             return False
         
         del self.profiles[name]
@@ -374,7 +433,7 @@ class ConfigManager:
             else:
                 self.settings['default_profile'] = None
         
-        print(f"✅ 已删除配置档案: {name}")
+        print(f"[OK] 已删除配置档案: {name}")
         
         # 自动同步到云端
         if self.settings['auto_sync']:
@@ -400,11 +459,11 @@ class ConfigManager:
     def set_default_profile(self, name: str) -> bool:
         """设置默认配置档案"""
         if name not in self.profiles:
-            print(f"❌ 配置档案 '{name}' 不存在")
+            print(f"[X] 配置档案 '{name}' 不存在")
             return False
         
         self.settings['default_profile'] = name
-        print(f"✅ 已设置默认配置: {name}")
+        print(f"[OK] 已设置默认配置: {name}")
         
         # 自动同步到云端
         if self.settings['auto_sync']:
@@ -435,73 +494,218 @@ class ConfigManager:
                         deleted_items.append(f"文件: {path}")
             
             if deleted_items:
-                print("✅ 已删除本地配置:")
+                print("[OK] 已删除本地配置:")
                 for item in deleted_items:
                     print(f"   - {item}")
                 print("")
-                print("💡 说明:")
+                print("[?] 说明:")
                 print("   - 本地配置已清理完成")
                 print("   - 云端数据已保留，其他设备仍可使用")
                 print("   - 重新运行 'nv init' 可恢复配置")
             else:
-                print("ℹ️ 未找到需要删除的本地配置")
+                print("[i] 未找到需要删除的本地配置")
             
             return True
             
         except Exception as e:
-            print(f"❌ 卸载失败: {e}")
+            print(f"[X] 卸载失败: {e}")
             return False
     
     def apply_profile(self, name: str) -> bool:
         """应用配置档案到Claude Code"""
         profile = self.get_profile(name)
         if not profile:
-            print(f"❌ 配置档案 '{name}' 不存在")
+            print(f"[X] 配置档案 '{name}' 不存在")
             return False
-        
+
         try:
             # 更新Claude Code配置文件
             claude_config_dir = Path.home() / ".claude"
             claude_config_dir.mkdir(exist_ok=True)
-            
+
             claude_config_file = claude_config_dir / "settings.json"
-            
+
             # 读取现有配置
             if claude_config_file.exists():
                 with open(claude_config_file, 'r') as f:
                     claude_config = json.load(f)
             else:
                 claude_config = {"env": {}, "permissions": {"allow": [], "deny": []}}
-            
+
             # 更新API配置
             if "env" not in claude_config:
                 claude_config["env"] = {}
-            
-            claude_config["env"]["ANTHROPIC_BASE_URL"] = profile.base_url
-            claude_config["env"]["ANTHROPIC_API_KEY"] = profile.api_key
-            claude_config["env"]["ANTHROPIC_AUTH_TOKEN"] = profile.api_key  # 同时填充 AUTH_TOKEN
-            claude_config["apiKeyHelper"] = f"echo '{profile.api_key}'"
-            
+
+            # 优先使用第一个 endpoint，否则使用传统字段
+            if profile.endpoints:
+                first_endpoint = profile.endpoints[0]
+                base_url = first_endpoint.base_url
+                api_key = first_endpoint.api_key
+            else:
+                base_url = profile.base_url
+                api_key = profile.api_key
+
+            claude_config["env"]["ANTHROPIC_BASE_URL"] = base_url
+            claude_config["env"]["ANTHROPIC_API_KEY"] = api_key
+            claude_config["env"]["ANTHROPIC_AUTH_TOKEN"] = api_key  # 同时填充 AUTH_TOKEN
+            claude_config["apiKeyHelper"] = f"echo '{api_key}'"
+
             # 写入配置文件
             with open(claude_config_file, 'w') as f:
                 json.dump(claude_config, f, indent=2, ensure_ascii=False)
-            
+
             # 设置文件权限
             claude_config_file.chmod(0o600)
-            
+
             # 更新最后使用时间
             profile.update_last_used()
-            
-            print(f"✅ 已应用配置: {name}")
-            print(f"   BASE_URL: {profile.base_url}")
-            print(f"   API_KEY: {profile.api_key[:10]}...{profile.api_key[-4:]}")
-            
+
+            print(f"[OK] 已应用配置: {name}")
+            print(f"   BASE_URL: {base_url}")
+            print(f"   API_KEY: {api_key[:10]}...{api_key[-4:]}")
+            if profile.endpoints:
+                print(f"   Endpoints: {len(profile.endpoints)} 个")
+
             # 保存更新后的使用时间
+            self._save_local_cache()
             if self.settings['auto_sync']:
                 self.sync_to_cloud()
-            
+
             return True
-            
+
         except Exception as e:
-            print(f"❌ 应用配置失败: {e}")
+            print(f"[X] 应用配置失败: {e}")
             return False
+
+    # ========== Endpoint 管理方法（新增） ==========
+
+    def add_endpoint_to_profile(self, profile_name: str, endpoint) -> bool:
+        """为配置添加 endpoint
+
+        Args:
+            profile_name: 配置名称
+            endpoint: Endpoint 实例
+
+        Returns:
+            是否成功
+        """
+        profile = self.get_profile(profile_name)
+        if not profile:
+            print(f"[X] 配置 '{profile_name}' 不存在")
+            return False
+
+        # 初始化 endpoints 列表
+        if not profile.endpoints:
+            profile.endpoints = []
+
+        profile.endpoints.append(endpoint)
+
+        print(f"[OK] 已为配置 '{profile_name}' 添加 endpoint: {endpoint.id}")
+
+        # 保存
+        self._save_local_cache()
+        if self.settings['auto_sync']:
+            self.sync_to_cloud()
+
+        return True
+
+    def remove_endpoint_from_profile(self, profile_name: str, endpoint_id: str) -> bool:
+        """从配置中删除 endpoint
+
+        Args:
+            profile_name: 配置名称
+            endpoint_id: Endpoint ID
+
+        Returns:
+            是否成功
+        """
+        profile = self.get_profile(profile_name)
+        if not profile:
+            print(f"[X] 配置 '{profile_name}' 不存在")
+            return False
+
+        if not profile.endpoints:
+            print(f"[X] 配置 '{profile_name}' 没有 endpoints")
+            return False
+
+        # 查找并删除
+        for i, ep in enumerate(profile.endpoints):
+            if ep.id == endpoint_id:
+                del profile.endpoints[i]
+                print(f"[OK] 已删除 endpoint: {endpoint_id}")
+
+                # 保存
+                self._save_local_cache()
+                if self.settings['auto_sync']:
+                    self.sync_to_cloud()
+
+                return True
+
+        print(f"[X] 未找到 endpoint: {endpoint_id}")
+        return False
+
+    def get_all_endpoints(self) -> List:
+        """获取所有配置的所有 endpoint
+
+        Returns:
+            所有 endpoint 的列表
+        """
+        all_endpoints = []
+
+        for profile in self.profiles.values():
+            if profile.endpoints:
+                all_endpoints.extend(profile.endpoints)
+
+        return all_endpoints
+
+    def save_profile(self, profile: ConfigProfile) -> bool:
+        """保存配置档案（支持 endpoints）
+
+        Args:
+            profile: 配置档案实例
+
+        Returns:
+            是否成功
+        """
+        self.profiles[profile.name] = profile
+
+        print(f"[OK] 已保存配置: {profile.name}")
+
+        # 保存到本地和云端
+        self._save_local_cache()
+        if self.settings['auto_sync']:
+            self.sync_to_cloud()
+
+        return True
+
+    def save_profiles(self) -> bool:
+        """保存所有配置档案
+
+        Returns:
+            是否成功
+        """
+        try:
+            # 保存到本地和云端
+            print("[~] 保存配置...")
+            self._save_local_cache()
+            print(f"[i] auto_sync = {self.settings['auto_sync']}, storage_backend = {self.storage_backend}")
+            if self.settings['auto_sync']:
+                self.sync_to_cloud()
+
+            return True
+        except Exception as e:
+            print(f"[X] 保存配置失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    def has_profile(self, name: str) -> bool:
+        """检查配置是否存在
+
+        Args:
+            name: 配置名称
+
+        Returns:
+            是否存在
+        """
+        return name in self.profiles
