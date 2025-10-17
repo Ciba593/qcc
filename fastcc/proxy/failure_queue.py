@@ -51,39 +51,49 @@ class FailureQueue:
             'total_still_failed': 0
         }
 
+        # 并发控制锁
+        self._lock = asyncio.Lock()
+
         # 加载持久化数据
         self._load()
 
-    def add_failed_endpoint(self, endpoint_id: str, reason: str = ""):
-        """将失败的 endpoint 加入队列
+    async def add_failed_endpoint(self, endpoint_id: str, reason: str = ""):
+        """将失败的 endpoint 加入队列（线程安全）
 
         Args:
             endpoint_id: Endpoint ID
             reason: 失败原因
         """
-        if endpoint_id not in self.failed_endpoints:
-            self.failed_endpoints.add(endpoint_id)
-            self.last_check_times[endpoint_id] = datetime.now()
-            self.stats['total_failed'] += 1
+        async with self._lock:
+            if endpoint_id not in self.failed_endpoints:
+                self.failed_endpoints.add(endpoint_id)
+                self.last_check_times[endpoint_id] = datetime.now()
+                self.stats['total_failed'] += 1
 
-            logger.info(
-                f"Endpoint {endpoint_id} 加入失败队列, 原因: {reason}"
-            )
+                logger.info(
+                    f"Endpoint {endpoint_id} 加入失败队列, 原因: {reason}"
+                )
 
-            # 持久化
-            self._save()
+                # 持久化
+                self._save()
+            else:
+                # 已经在队列中，只更新时间和原因（不重复统计）
+                logger.debug(
+                    f"Endpoint {endpoint_id} 已在失败队列中（原因: {reason}），跳过重复添加"
+                )
 
-    def remove_endpoint(self, endpoint_id: str):
-        """从队列中移除 endpoint
+    async def remove_endpoint(self, endpoint_id: str):
+        """从队列中移除 endpoint（线程安全）
 
         Args:
             endpoint_id: Endpoint ID
         """
-        if endpoint_id in self.failed_endpoints:
-            self.failed_endpoints.remove(endpoint_id)
-            self.last_check_times.pop(endpoint_id, None)
-            logger.info(f"Endpoint {endpoint_id} 已从失败队列移除")
-            self._save()
+        async with self._lock:
+            if endpoint_id in self.failed_endpoints:
+                self.failed_endpoints.remove(endpoint_id)
+                self.last_check_times.pop(endpoint_id, None)
+                logger.info(f"Endpoint {endpoint_id} 已从失败队列移除")
+                self._save()
 
     async def process_queue(self, all_endpoints: List = None):
         """处理队列中的 endpoint（后台任务）
@@ -150,7 +160,7 @@ class FailureQueue:
                     is_failure=False,
                     response_time=check.response_time_ms
                 )
-                self.remove_endpoint(endpoint.id)
+                await self.remove_endpoint(endpoint.id)
                 self.stats['total_recovered'] += 1
                 logger.info(
                     f"[OK] Endpoint {endpoint.id} 已恢复健康 "

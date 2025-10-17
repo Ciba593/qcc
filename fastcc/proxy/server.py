@@ -435,7 +435,7 @@ class ProxyServer:
                         )
                         # 将失败的 endpoint 加入验证队列
                         if self.failure_queue:
-                            self.failure_queue.add_failed_endpoint(
+                            await self.failure_queue.add_failed_endpoint(
                                 endpoint.id,
                                 f"HTTP {response.status}"
                             )
@@ -459,7 +459,7 @@ class ProxyServer:
             # 将失败请求加入队列
             if self.failure_queue:
                 # 将失败的 endpoint 加入验证队列
-                self.failure_queue.add_failed_endpoint(
+                await self.failure_queue.add_failed_endpoint(
                     endpoint.id,
                     f"Timeout after {endpoint.timeout}s"
                 )
@@ -475,7 +475,7 @@ class ProxyServer:
             # 将失败请求加入队列
             if self.failure_queue:
                 # 将失败的 endpoint 加入验证队列
-                self.failure_queue.add_failed_endpoint(
+                await self.failure_queue.add_failed_endpoint(
                     endpoint.id,
                     str(e)
                 )
