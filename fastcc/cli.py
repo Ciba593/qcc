@@ -9,12 +9,58 @@ from pathlib import Path
 
 from .core.config import ConfigManager
 from .utils.crypto import generate_master_key
-from .utils.ui import select_from_list, print_status, print_header, show_loading, print_separator, confirm_action
+from .utils.ui import select_from_list, print_status, print_header, show_loading, print_separator, confirm_action, safe_icon
 from .providers.manager import ProvidersManager
 from .providers.browser import (
-    open_browser_and_wait, wait_for_input, confirm_continue, 
+    open_browser_and_wait, wait_for_input, confirm_continue,
     print_step, print_provider_info
 )
+
+
+# Windows 兼容的 print 函数
+def safe_print(text: str):
+    """安全地打印文本，自动替换 emoji 为 ASCII 符号"""
+    # 替换所有常用 emoji
+    emoji_map = {
+        '🚀': safe_icon('🚀'),
+        '✅': safe_icon('✅'),
+        '❌': safe_icon('❌'),
+        '⚠️': safe_icon('⚠️'),
+        'ℹ️': safe_icon('ℹ️'),
+        '⏳': safe_icon('⏳'),
+        '⭐': safe_icon('⭐'),
+        '🔄': safe_icon('🔄'),
+        '💰': safe_icon('💰'),
+        '📊': safe_icon('📊'),
+        '🎯': safe_icon('🎯'),
+        '💡': safe_icon('💡'),
+        '🔧': safe_icon('🔧'),
+        '📝': safe_icon('📝'),
+        '🎉': safe_icon('🎉'),
+        '📋': safe_icon('📋'),
+        '👋': safe_icon('👋'),
+        '⚙️': safe_icon('⚙️'),
+        '🗑️': safe_icon('🗑️'),
+        '⏱️': safe_icon('⏱️'),
+        '🚫': safe_icon('🚫'),
+        '❓': safe_icon('❓'),
+        '🔥': safe_icon('🔥'),
+        '⚡': safe_icon('⚡'),
+        '🛡️': safe_icon('🛡️'),
+        '👤': safe_icon('👤'),
+        '🤖': safe_icon('🤖'),
+    }
+
+    for emoji, replacement in emoji_map.items():
+        text = text.replace(emoji, replacement)
+
+    # 在 Windows 上，尝试使用 errors='replace' 处理无法编码的字符
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # 如果仍然出错，使用 ASCII 编码并替换无法编码的字符
+        safe_text = text.encode('ascii', errors='replace').decode('ascii')
+        print(safe_text)
 
 
 @click.group(invoke_without_command=True)
@@ -22,17 +68,24 @@ from .providers.browser import (
 @click.pass_context
 def cli(ctx, smart):
     """FastCC - 快速Claude配置管理工具
-    
-    常用命令：
-      qcc                         # 智能启动（推荐）
-      qcc init                    # 初始化配置
-      qcc add <名称>              # 添加新配置
-      qcc list                    # 查看所有配置
-      qcc use <名称>              # 使用指定配置
-      qcc fc                      # 厂商快速配置
-      qcc config                  # 配置管理（更改同步方式等）
-      qcc uninstall               # 卸载本地配置
-      qcc status                  # 查看状态
+
+    \b
+    本地开发测试：
+      uvx --from . qcc              智能启动（推荐）
+      uvx --from . qcc init         初始化配置
+      uvx --from . qcc add <名称>   添加新配置
+      uvx --from . qcc list         查看所有配置
+      uvx --from . qcc use <名称>   使用指定配置
+      uvx --from . qcc fc           厂商快速配置
+
+    \b
+    远程安装使用：
+      uvx qcc                       智能启动（推荐）
+      uvx qcc init                  初始化配置
+      uvx qcc add <名称>            添加新配置
+      uvx qcc list                  查看所有配置
+      uvx qcc use <名称>            使用指定配置
+      uvx qcc fc                    厂商快速配置
     """
     if ctx.invoked_subcommand is None:
         if smart:
@@ -156,7 +209,7 @@ def quick_launch():
         
         # 检查是否已初始化
         if not config_manager.user_id:
-            print("🚀 欢迎使用FastCC！")
+            safe_print("🚀 欢迎使用FastCC！")
             print("首次使用需要初始化配置，请运行: nv init")
             print("或者使用: nv fastcc 进行智能启动")
             return
@@ -167,7 +220,7 @@ def quick_launch():
         
         profiles = config_manager.list_profiles()
         if not profiles:
-            print("📝 暂无配置档案，请使用 'nv add' 添加配置")
+            safe_print("📝 暂无配置档案，请使用 'nv add' 添加配置")
             return
         
         # 获取默认配置或让用户选择
@@ -175,12 +228,12 @@ def quick_launch():
         
         if default_profile:
             # 使用默认配置
-            print(f"🚀 使用默认配置: {default_profile.name}")
+            safe_print(f"🚀 使用默认配置: {default_profile.name}")
             if config_manager.apply_profile(default_profile.name):
                 launch_claude_code()
         else:
             # 显示配置列表让用户选择
-            print("📋 可用配置档案:")
+            safe_print("📋 可用配置档案:")
             for i, profile in enumerate(profiles, 1):
                 last_used = profile.last_used or "从未使用"
                 if profile.last_used:
@@ -196,18 +249,18 @@ def quick_launch():
                     if config_manager.apply_profile(selected_profile.name):
                         launch_claude_code()
                 else:
-                    print("❌ 无效选择")
+                    safe_print("❌ 无效选择")
             except (ValueError, KeyboardInterrupt):
-                print("❌ 操作取消")
+                safe_print("❌ 操作取消")
                 
     except Exception as e:
-        print(f"❌ 启动失败: {e}")
+        safe_print(f"❌ 启动失败: {e}")
 
 
 def launch_claude_code():
     """启动Claude Code"""
     try:
-        print("🚀 正在启动Claude Code...")
+        safe_print("🚀 正在启动Claude Code...")
         
         # 检测操作系统，Windows需要shell=True
         import platform
@@ -221,19 +274,19 @@ def launch_claude_code():
             # Claude Code已安装，启动交互模式
             subprocess.run(['claude'], shell=is_windows)
         else:
-            print("❌ 未找到Claude Code，请先安装: https://claude.ai/code")
+            safe_print("❌ 未找到Claude Code，请先安装: https://claude.ai/code")
             
     except FileNotFoundError:
-        print("❌ 未找到Claude Code，请先安装: https://claude.ai/code")
+        safe_print("❌ 未找到Claude Code，请先安装: https://claude.ai/code")
     except KeyboardInterrupt:
-        print("\n👋 退出Claude Code")
+        safe_print("\n👋 退出Claude Code")
 
 
 @cli.command()
 def init():
     """初始化FastCC配置"""
     try:
-        print("🔧 初始化FastCC...")
+        safe_print("🔧 初始化FastCC...")
         
         config_manager = ConfigManager()
         
@@ -242,16 +295,16 @@ def init():
             # 尝试从云端同步现有配置
             config_manager.sync_from_cloud()
             
-            print("✅ FastCC初始化完成！")
+            safe_print("✅ FastCC初始化完成！")
             print("现在可以使用以下命令：")
             print("  nv add <名称>     - 添加新配置")
             print("  nv list          - 查看所有配置")
             print("  nv               - 快速启动")
         else:
-            print("❌ 初始化失败")
+            safe_print("❌ 初始化失败")
             
     except Exception as e:
-        print(f"❌ 初始化失败: {e}")
+        safe_print(f"❌ 初始化失败: {e}")
 
 
 @cli.command()
@@ -263,33 +316,36 @@ def add(name, description):
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print("❌ 请先运行 'nv init' 初始化配置")
+            safe_print("❌ 请先运行 'nv init' 初始化配置")
             return
         
         # 确保存储后端已初始化
         if not config_manager.storage_backend:
             if not config_manager.initialize_storage_backend():
-                print("❌ 存储后端初始化失败")
+                safe_print("❌ 存储后端初始化失败")
                 return
-        
+
+        # 从云端同步最新配置，避免名称冲突
+        config_manager.sync_from_cloud()
+
         print(f"➕ 添加配置档案: {name}")
-        
+
         # 获取用户输入
         base_url = input("请输入 ANTHROPIC_BASE_URL: ").strip()
         if not base_url:
-            print("❌ BASE_URL 不能为空")
+            safe_print("❌ BASE_URL 不能为空")
             return
         
         api_key = input("请输入 ANTHROPIC_API_KEY: ").strip()
         if not api_key:
-            print("❌ API_KEY 不能为空")
+            safe_print("❌ API_KEY 不能为空")
             return
         
         if not description:
             description = input("请输入配置描述 (可选): ").strip()
         
         # 确认信息
-        print(f"\n📋 配置信息:")
+        safe_print(f"\n📋 配置信息:")
         print(f"  名称: {name}")
         print(f"  描述: {description or '无'}")
         print(f"  BASE_URL: {base_url}")
@@ -298,16 +354,16 @@ def add(name, description):
         confirm = input("\n确认添加? (y/N): ").strip().lower()
         if confirm in ['y', 'yes', '是']:
             if config_manager.add_profile(name, description, base_url, api_key):
-                print("✅ 配置添加成功！")
+                safe_print("✅ 配置添加成功！")
             else:
-                print("❌ 配置添加失败")
+                safe_print("❌ 配置添加失败")
         else:
-            print("❌ 操作取消")
+            safe_print("❌ 操作取消")
             
     except KeyboardInterrupt:
-        print("\n❌ 操作取消")
+        safe_print("\n❌ 操作取消")
     except Exception as e:
-        print(f"❌ 添加配置失败: {e}")
+        safe_print(f"❌ 添加配置失败: {e}")
 
 
 @cli.command()
@@ -317,13 +373,13 @@ def list():
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print("❌ 请先运行 'nv init' 初始化配置")
+            safe_print("❌ 请先运行 'nv init' 初始化配置")
             return
         
         # 确保存储后端已初始化
         if not config_manager.storage_backend:
             if not config_manager.initialize_storage_backend():
-                print("❌ 存储后端初始化失败")
+                safe_print("❌ 存储后端初始化失败")
                 return
         
         # 从云端同步最新配置
@@ -334,25 +390,25 @@ def list():
         default_name = config_manager.settings.get('default_profile')
         
         if not profiles:
-            print("📝 暂无配置档案")
+            safe_print("📝 暂无配置档案")
             print("使用 'nv add <名称>' 添加新配置")
             return
         
-        print("📋 配置档案列表:")
+        safe_print("📋 配置档案列表:")
         for profile in profiles:
-            is_default = "⭐" if profile.name == default_name else "  "
+            is_default = safe_icon("⭐") if profile.name == default_name else "  "
             last_used = profile.last_used or "从未使用"
             if profile.last_used:
                 last_used = profile.last_used[:16].replace('T', ' ')
-            
-            print(f"{is_default} {profile.name}")
-            print(f"     描述: {profile.description or '无'}")
-            print(f"     BASE_URL: {profile.base_url}")
-            print(f"     最后使用: {last_used}")
-            print()
-            
+
+            safe_print(f"{is_default} {profile.name}")
+            safe_print(f"     描述: {profile.description or '无'}")
+            safe_print(f"     BASE_URL: {profile.base_url}")
+            safe_print(f"     最后使用: {last_used}")
+            safe_print("")
+
     except Exception as e:
-        print(f"❌ 列出配置失败: {e}")
+        safe_print(f"❌ 列出配置失败: {e}")
 
 
 @cli.command()
@@ -363,7 +419,7 @@ def use(name):
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
         
         # 确保存储后端已初始化
@@ -378,7 +434,7 @@ def use(name):
         profiles = config_manager.list_profiles()
         if not profiles:
             print_status("暂无配置档案", "warning")
-            print("请先添加配置: qcc add <名称>")
+            print("请先添加配置: uvx qcc add <名称>（本地测试: uvx --from . qcc add <名称>）")
             return
         
         # 如果提供了名称参数，直接使用
@@ -444,7 +500,7 @@ def default(name):
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
         
         # 确保存储后端已初始化
@@ -459,7 +515,7 @@ def default(name):
         profiles = config_manager.list_profiles()
         if not profiles:
             print_status("暂无配置档案", "warning")
-            print("请先添加配置: qcc add <名称>")
+            print("请先添加配置: uvx qcc add <名称>（本地测试: uvx --from . qcc add <名称>）")
             return
         
         # 如果提供了名称参数，直接使用
@@ -518,7 +574,7 @@ def remove(name):
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
         
         # 确保存储后端已初始化
@@ -594,7 +650,7 @@ def remove(name):
     except KeyboardInterrupt:
         print_status("操作取消", "warning")
     except Exception as e:
-        print(f"❌ 删除配置失败: {e}")
+        safe_print(f"❌ 删除配置失败: {e}")
 
 
 @cli.command()
@@ -604,16 +660,16 @@ def sync():
         config_manager = ConfigManager()
         
         if not config_manager.user_id:
-            print("❌ 请先运行 'nv init' 初始化配置")
+            safe_print("❌ 请先运行 'nv init' 初始化配置")
             return
         
         # 确保存储后端已初始化
         if not config_manager.storage_backend:
             if not config_manager.initialize_storage_backend():
-                print("❌ 存储后端初始化失败")
+                safe_print("❌ 存储后端初始化失败")
                 return
         
-        print("🔄 同步配置...")
+        safe_print("🔄 同步配置...")
         
         # 从云端同步
         if config_manager.sync_from_cloud():
@@ -621,7 +677,7 @@ def sync():
             config_manager.sync_to_cloud()
         
     except Exception as e:
-        print(f"❌ 同步失败: {e}")
+        safe_print(f"❌ 同步失败: {e}")
 
 
 @cli.command()
@@ -636,7 +692,7 @@ def config():
     try:
         config_manager = ConfigManager()
         
-        print("⚙️  FastCC配置管理")
+        safe_print("⚙️  FastCC配置管理")
         print("1. 更改同步方式")
         print("2. 查看当前配置")
         print("3. 返回")
@@ -644,11 +700,11 @@ def config():
         choice = input("请选择 (1-3): ").strip()
         
         if choice == "1":
-            print("\n🔄 重新选择同步方式...")
+            safe_print("\n🔄 重新选择同步方式...")
             if config_manager.initialize_storage_backend(force_choose=True):
-                print("✅ 同步方式已更新")
+                safe_print("✅ 同步方式已更新")
             else:
-                print("❌ 更新失败")
+                safe_print("❌ 更新失败")
         
         elif choice == "2":
             backend_type = config_manager.settings.get('storage_backend_type', '未设置')
@@ -659,7 +715,7 @@ def config():
             }
             backend_name = backend_name_map.get(backend_type, backend_type)
             
-            print(f"\n📋 当前配置:")
+            safe_print(f"\n📋 当前配置:")
             print(f"  同步方式: {backend_name}")
             print(f"  用户ID: {config_manager.user_id or '未设置'}")
             print(f"  配置档案数: {len(config_manager.profiles)}")
@@ -669,25 +725,25 @@ def config():
         elif choice == "3":
             return
         else:
-            print("❌ 无效选择")
+            safe_print("❌ 无效选择")
             
     except KeyboardInterrupt:
-        print("\n❌ 操作取消")
+        safe_print("\n❌ 操作取消")
     except Exception as e:
-        print(f"❌ 配置失败: {e}")
+        safe_print(f"❌ 配置失败: {e}")
 
 
 @cli.command()
 def uninstall():
     """卸载FastCC本地配置"""
     try:
-        print("🗑️  FastCC本地配置卸载")
+        safe_print("🗑️  FastCC本地配置卸载")
         print("")
-        print("⚠️  此操作将删除：")
+        safe_print("⚠️  此操作将删除：")
         print("   - 所有本地配置文件 (~/.fastcc/)")
         print("   - Claude设置文件 (~/.claude/settings.json)")
         print("")
-        print("✅ 保留内容：")
+        safe_print("✅ 保留内容：")
         print("   - 云端配置数据（其他设备仍可使用）")
         print("   - FastCC程序本身")
         print("")
@@ -695,33 +751,33 @@ def uninstall():
         # 双重确认
         confirm1 = input("确认卸载本地配置？(输入 'yes' 确认): ").strip()
         if confirm1.lower() != 'yes':
-            print("❌ 操作取消")
+            safe_print("❌ 操作取消")
             return
         
         print("")
         confirm2 = input("最后确认：真的要删除所有本地配置吗？(输入 'DELETE' 确认): ").strip()
         if confirm2 != 'DELETE':
-            print("❌ 操作取消")
+            safe_print("❌ 操作取消")
             return
         
         print("")
-        print("🔄 正在卸载本地配置...")
+        safe_print("🔄 正在卸载本地配置...")
         
         config_manager = ConfigManager()
         if config_manager.uninstall_local():
             print("")
-            print("🎉 FastCC本地配置卸载完成！")
+            safe_print("🎉 FastCC本地配置卸载完成！")
             print("")
-            print("💡 后续操作：")
+            safe_print("💡 后续操作：")
             print("   - 重新使用：运行 'nv init' 重新初始化")
             print("   - 完全移除：使用包管理器卸载 FastCC")
         else:
-            print("❌ 卸载过程中出现错误")
+            safe_print("❌ 卸载过程中出现错误")
             
     except KeyboardInterrupt:
-        print("\n❌ 操作取消")
+        safe_print("\n❌ 操作取消")
     except Exception as e:
-        print(f"❌ 卸载失败: {e}")
+        safe_print(f"❌ 卸载失败: {e}")
 
 
 @cli.command()
@@ -730,7 +786,7 @@ def status():
     try:
         config_manager = ConfigManager()
         
-        print("📊 FastCC状态:")
+        safe_print("📊 FastCC状态:")
         print(f"  用户ID: {config_manager.user_id or '未初始化'}")
         print(f"  存储后端: {config_manager.storage_backend.backend_name if config_manager.storage_backend else '未配置'}")
         print(f"  配置档案数量: {len(config_manager.profiles)}")
@@ -753,7 +809,7 @@ def status():
             print("  Claude Code: 未安装")
             
     except Exception as e:
-        print(f"❌ 获取状态失败: {e}")
+        safe_print(f"❌ 获取状态失败: {e}")
 
 
 @cli.command()
@@ -765,31 +821,31 @@ def fc():
         # 检查是否已初始化，如果未初始化则自动初始化
         config_manager = ConfigManager()
         if not config_manager.user_id:
-            print("🔧 首次使用，正在初始化配置...")
+            safe_print("🔧 首次使用，正在初始化配置...")
             if not auto_initialize(config_manager):
-                print("❌ 初始化失败，请手动运行 'qcc init'")
+                safe_print("❌ 初始化失败，请手动运行 'uvx qcc init'（本地测试: uvx --from . qcc init）")
                 return
         
         # 确保存储后端已初始化
         if not config_manager.storage_backend:
             if not config_manager.initialize_storage_backend():
-                print("❌ 存储后端初始化失败")
+                safe_print("❌ 存储后端初始化失败")
                 return
         
         # 获取厂商配置
         providers_manager = ProvidersManager()
         if not providers_manager.fetch_providers():
-            print("❌ 无法获取厂商配置，请检查网络连接")
+            safe_print("❌ 无法获取厂商配置，请检查网络连接")
             return
         
         providers = providers_manager.get_providers()
         if not providers:
-            print("❌ 暂无可用厂商配置")
+            safe_print("❌ 暂无可用厂商配置")
             return
         
         # 步骤1: 选择厂商
         print_step(1, 5, "选择 AI 厂商")
-        print("📋 可用厂商:")
+        safe_print("📋 可用厂商:")
         for i, provider in enumerate(providers, 1):
             print(f"  {i}. {provider}")
         
@@ -798,13 +854,13 @@ def fc():
             provider_index = int(choice) - 1
             
             if not (0 <= provider_index < len(providers)):
-                print("❌ 无效选择")
+                safe_print("❌ 无效选择")
                 return
                 
             selected_provider = providers[provider_index]
             
         except (ValueError, KeyboardInterrupt):
-            print("❌ 操作取消")
+            safe_print("❌ 操作取消")
             return
         
         # 步骤2: 显示厂商信息并直接打开注册页面
@@ -821,7 +877,7 @@ def fc():
         
         # 步骤3: 等待用户获取API Key
         print_step(3, 5, "获取 API Key")
-        print(f"💡 {selected_provider.api_key_help}")
+        safe_print(f"💡 {selected_provider.api_key_help}")
         wait_for_input("完成注册/登录后，请按回车键继续...")
         
         # 输入API Key
@@ -829,17 +885,17 @@ def fc():
             try:
                 api_key = input(f"\n请输入 {selected_provider.name} 的 API Key: ").strip()
                 if not api_key:
-                    print("❌ API Key 不能为空")
+                    safe_print("❌ API Key 不能为空")
                     continue
                 
                 # 验证API Key格式
                 if not providers_manager.validate_api_key(selected_provider, api_key):
-                    print("⚠️  API Key 格式可能不正确，但将继续使用")
+                    safe_print("⚠️  API Key 格式可能不正确，但将继续使用")
                 
                 break
                 
             except KeyboardInterrupt:
-                print("\n❌ 操作取消")
+                safe_print("\n❌ 操作取消")
                 return
         
         # 步骤4: 确认Base URL
@@ -854,7 +910,7 @@ def fc():
                     base_url = custom_base_url
                     break
                 else:
-                    print("❌ 无效的 URL 格式")
+                    safe_print("❌ 无效的 URL 格式")
         else:
             base_url = selected_provider.base_url
         
@@ -864,12 +920,12 @@ def fc():
         while True:
             config_name = input("请输入配置名称: ").strip()
             if not config_name:
-                print("❌ 配置名称不能为空")
+                safe_print("❌ 配置名称不能为空")
                 continue
             
             # 检查是否已存在
             if config_manager.get_profile(config_name):
-                print(f"❌ 配置 '{config_name}' 已存在，请使用其他名称")
+                safe_print(f"❌ 配置 '{config_name}' 已存在，请使用其他名称")
                 continue
             
             break
@@ -879,7 +935,7 @@ def fc():
             description = f"{selected_provider.name} 配置"
         
         # 确认配置信息
-        print(f"\n📋 配置信息确认:")
+        safe_print(f"\n📋 配置信息确认:")
         print(f"  厂商: {selected_provider.name}")
         print(f"  名称: {config_name}")
         print(f"  描述: {description}")
@@ -887,26 +943,26 @@ def fc():
         print(f"  API Key: {api_key[:10]}...{api_key[-4:]}")
         
         if not confirm_continue("确认创建配置？"):
-            print("❌ 操作取消")
+            safe_print("❌ 操作取消")
             return
         
         # 创建配置
         if config_manager.add_profile(config_name, description, base_url, api_key):
-            print("✅ 配置创建成功！")
+            safe_print("✅ 配置创建成功！")
             
             # 询问是否立即使用
             if confirm_continue("是否立即使用此配置启动 Claude Code？"):
                 if config_manager.apply_profile(config_name):
                     launch_claude_code()
             else:
-                print(f"💡 稍后可使用 'qcc use {config_name}' 启动此配置")
+                safe_print(f"💡 稍后可使用 'uvx qcc use {config_name}' 启动此配置（本地测试: uvx --from . qcc use {config_name}）")
         else:
-            print("❌ 配置创建失败")
+            safe_print("❌ 配置创建失败")
             
     except KeyboardInterrupt:
-        print("\n❌ 操作取消")
+        safe_print("\n❌ 操作取消")
     except Exception as e:
-        print(f"❌ 厂商配置失败: {e}")
+        safe_print(f"❌ 厂商配置失败: {e}")
 
 
 # ========== Proxy 命令组（新增） ==========
@@ -956,7 +1012,7 @@ def proxy_start(host, port, cluster):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         # 如果指定了集群配置，则加载该集群的 endpoints
@@ -964,12 +1020,12 @@ def proxy_start(host, port, cluster):
             cluster_profile = config_manager.get_profile(cluster)
             if not cluster_profile:
                 print_status(f"集群配置 '{cluster}' 不存在", "error")
-                print("💡 使用 'qcc endpoint add' 创建集群配置")
+                safe_print("💡 使用 'uvx qcc endpoint add' 创建集群配置")
                 return
 
             if not hasattr(cluster_profile, 'endpoints') or not cluster_profile.endpoints:
                 print_status(f"集群配置 '{cluster}' 没有 endpoints", "error")
-                print("💡 使用 'qcc endpoint add' 添加 endpoints")
+                safe_print("💡 使用 'uvx qcc endpoint add' 添加 endpoints")
                 return
 
             print_status(f"使用集群配置: {cluster}", "success")
@@ -986,7 +1042,7 @@ def proxy_start(host, port, cluster):
             profiles = config_manager.list_profiles()
             if not profiles:
                 print_status("暂无配置档案", "warning")
-                print("请先添加配置: qcc add <名称>")
+                print("请先添加配置: uvx qcc add <名称>（本地测试: uvx --from . qcc add <名称>）")
                 return
 
         # 初始化负载均衡器 - 使用主备优先级策略
@@ -1036,7 +1092,7 @@ def proxy_start(host, port, cluster):
         # 运行服务器
         print(f"正在启动代理服务器 {host}:{port}...")
         print(f"")
-        print(f"💡 使用方法:")
+        safe_print(f"💡 使用方法:")
         print(f"   1. 设置环境变量:")
         print(f"      export ANTHROPIC_BASE_URL=http://{host}:{port}")
         print(f"      export ANTHROPIC_API_KEY=proxy-managed")
@@ -1087,13 +1143,13 @@ def proxy_status():
 
         print_status(f"代理服务器正在运行", "success")
         print()
-        print(f"📊 服务器信息:")
+        safe_print(f"📊 服务器信息:")
         print(f"  进程 ID: {pid}")
         print(f"  监听地址: http://{host}:{port}")
         print(f"  启动时间: {start_time[:19].replace('T', ' ')}")
         print(f"  运行时长: {hours}小时 {minutes}分钟 {seconds}秒")
         print()
-        print("💡 停止服务器: qcc proxy stop")
+        safe_print("💡 停止服务器: uvx qcc proxy stop")
 
     except Exception as e:
         print_status(f"查看状态失败: {e}", "error")
@@ -1138,16 +1194,115 @@ def proxy_stop():
         traceback.print_exc()
 
 
+@proxy.command('use')
+@click.argument('cluster_name')
+@click.option('--host', default='127.0.0.1', help='代理服务器地址')
+@click.option('--port', default=7860, help='代理服务器端口')
+def proxy_use(cluster_name, host, port):
+    """配置 Claude Code 使用代理服务器访问集群
+
+    \b
+    示例:
+        uvx qcc proxy use test                    # 配置使用 test 集群
+        uvx qcc proxy use test --port 8080        # 使用自定义端口
+    """
+    try:
+        import json
+        from pathlib import Path
+        from .core.config import ConfigManager
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
+            return
+
+        # 检查集群配置是否存在
+        cluster_profile = config_manager.get_profile(cluster_name)
+        if not cluster_profile:
+            print_status(f"集群配置 '{cluster_name}' 不存在", "error")
+            safe_print("💡 使用 'uvx qcc endpoint add' 创建集群配置")
+            return
+
+        if not hasattr(cluster_profile, 'endpoints') or not cluster_profile.endpoints:
+            print_status(f"配置 '{cluster_name}' 不是集群配置（无 endpoints）", "error")
+            safe_print("💡 使用 'uvx qcc endpoint add' 创建集群配置")
+            return
+
+        print_header(f"配置 Claude Code 使用代理访问集群: {cluster_name}")
+
+        # 设置 Claude Code 环境变量指向代理服务器
+        claude_config_dir = Path.home() / ".claude"
+        claude_config_dir.mkdir(exist_ok=True)
+        claude_config_file = claude_config_dir / "settings.json"
+
+        # 读取现有配置
+        if claude_config_file.exists():
+            with open(claude_config_file, 'r') as f:
+                claude_config = json.load(f)
+        else:
+            claude_config = {"env": {}, "permissions": {"allow": [], "deny": []}}
+
+        if "env" not in claude_config:
+            claude_config["env"] = {}
+
+        # 设置指向代理服务器（使用占位符 API Key，代理会替换为实际的 Key）
+        proxy_url = f"http://{host}:{port}"
+        claude_config["env"]["ANTHROPIC_BASE_URL"] = proxy_url
+        claude_config["env"]["ANTHROPIC_API_KEY"] = "proxy-managed"
+        claude_config["env"]["ANTHROPIC_AUTH_TOKEN"] = "proxy-managed"
+        claude_config["apiKeyHelper"] = "echo 'proxy-managed'"
+
+        # 写入配置
+        with open(claude_config_file, 'w') as f:
+            json.dump(claude_config, f, indent=2, ensure_ascii=False)
+
+        claude_config_file.chmod(0o600)
+
+        print_status("Claude Code 配置已更新", "success")
+        print()
+        print(f"集群配置 '{cluster_name}':")
+        print(f"  代理地址: {proxy_url}")
+        print(f"  Endpoints: {len(cluster_profile.endpoints)} 个")
+        print()
+
+        for i, ep in enumerate(cluster_profile.endpoints, 1):
+            priority_label = "主节点" if ep.priority == 1 else "副节点" if ep.priority == 2 else "其他"
+            print(f"  {i}. [{priority_label}] {ep.base_url}")
+
+        print()
+        print_separator()
+        safe_print("💡 使用步骤:")
+        print("   1. 启动代理服务器:")
+        print(f"      uvx qcc proxy start --cluster {cluster_name}")
+        print()
+        print("   2. 启动 Claude Code:")
+        print("      claude")
+        print()
+        safe_print("🔍 查看状态:")
+        print("   - 代理状态: uvx qcc proxy status")
+        print("   - 健康检查: uvx qcc health status")
+        print("   - 查看日志: uvx qcc proxy logs -f")
+        print()
+        safe_print("⚠️  注意: 必须先启动代理服务器，Claude Code 才能正常工作！")
+
+    except Exception as e:
+        print_status(f"配置失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
 @proxy.command('logs')
 @click.option('--lines', '-n', default=50, type=int, help='显示行数')
 @click.option('--follow', '-f', is_flag=True, help='实时跟踪日志')
 def proxy_logs(lines, follow):
     """查看代理服务器日志
 
+    \b
     示例:
-        qcc proxy logs              # 查看最近 50 行日志
-        qcc proxy logs -n 100       # 查看最近 100 行日志
-        qcc proxy logs -f           # 实时跟踪日志
+        uvx qcc proxy logs              # 查看最近 50 行日志
+        uvx qcc proxy logs -n 100       # 查看最近 100 行日志
+        uvx qcc proxy logs -f           # 实时跟踪日志
     """
     try:
         from pathlib import Path
@@ -1158,7 +1313,7 @@ def proxy_logs(lines, follow):
 
         if not log_file.exists():
             print_status("日志文件不存在", "warning")
-            print("💡 启动代理服务器后会自动创建日志文件")
+            safe_print("💡 启动代理服务器后会自动创建日志文件")
             return
 
         if follow:
@@ -1182,7 +1337,7 @@ def proxy_logs(lines, follow):
 
             print()
             print(f"\n显示最近 {len(display_lines)} 行日志")
-            print("💡 使用 -f 选项实时跟踪日志: qcc proxy logs -f")
+            safe_print("💡 使用 -f 选项实时跟踪日志: uvx qcc proxy logs -f")
 
     except Exception as e:
         print_status(f"查看日志失败: {e}", "error")
@@ -1202,10 +1357,11 @@ def health():
 def health_test(endpoint_id, verbose):
     """执行对话测试
 
+    \b
     示例:
-        qcc health test                  # 测试所有 endpoint
-        qcc health test endpoint-1       # 测试指定 endpoint
-        qcc health test -v               # 显示详细信息
+        uvx qcc health test                  # 测试所有 endpoint
+        uvx qcc health test endpoint-1       # 测试指定 endpoint
+        uvx qcc health test -v               # 显示详细信息
     """
     try:
         import asyncio
@@ -1220,7 +1376,7 @@ def health_test(endpoint_id, verbose):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         # 获取所有配置的 endpoints
@@ -1231,7 +1387,7 @@ def health_test(endpoint_id, verbose):
 
         if not endpoints:
             print_status("没有可测试的 endpoint", "warning")
-            print("💡 提示: 使用 'qcc endpoint add <config-name>' 添加 endpoint")
+            safe_print("💡 提示: 使用 'uvx qcc endpoint add <config-name>' 添加 endpoint")
             return
 
         print(f"🔍 测试 {len(endpoints)} 个 endpoint...\n")
@@ -1273,7 +1429,7 @@ def health_test(endpoint_id, verbose):
 
         # 显示汇总
         print_separator()
-        print(f"📊 测试汇总: {success_count}/{len(results)} 成功")
+        safe_print(f"📊 测试汇总: {success_count}/{len(results)} 成功")
 
     except Exception as e:
         print_status(f"测试失败: {e}", "error")
@@ -1286,9 +1442,10 @@ def health_test(endpoint_id, verbose):
 def health_metrics(endpoint_id):
     """查看性能指标
 
+    \b
     示例:
-        qcc health metrics               # 查看所有 endpoint 指标
-        qcc health metrics endpoint-1    # 查看指定 endpoint 指标
+        uvx qcc health metrics               # 查看所有 endpoint 指标
+        uvx qcc health metrics endpoint-1    # 查看指定 endpoint 指标
     """
     try:
         from pathlib import Path
@@ -1301,8 +1458,8 @@ def health_metrics(endpoint_id):
 
         if not metrics_file.exists():
             print_status("暂无性能指标数据", "warning")
-            print("💡 提示:")
-            print("   1. 使用 'qcc proxy start' 启动代理服务器")
+            safe_print("💡 提示:")
+            print("   1. 使用 'uvx qcc proxy start' 启动代理服务器")
             print("   2. 代理服务器会自动收集性能指标")
             print("   3. 然后可以使用此命令查看指标")
             return
@@ -1337,7 +1494,7 @@ def _print_detailed_metrics(metrics):
     print(f"Endpoint: {metrics['endpoint_id']}")
     print()
 
-    print("📊 检查统计:")
+    safe_print("📊 检查统计:")
     print(f"  总检查次数: {metrics['total_checks']}")
     print(f"  成功次数: {metrics['successful_checks']}")
     print(f"  失败次数: {metrics['failed_checks']}")
@@ -1353,7 +1510,7 @@ def _print_detailed_metrics(metrics):
     print(f"  稳定性评分: {metrics['stability_score']:.1f}/100")
     print()
 
-    print("🔄 连续状态:")
+    safe_print("🔄 连续状态:")
     print(f"  连续成功: {metrics['consecutive_successes']} 次")
     print(f"  连续失败: {metrics['consecutive_failures']} 次")
     print()
@@ -1376,8 +1533,9 @@ def _print_summary_metrics(metrics):
 def health_check():
     """立即执行健康检查（需要代理服务器运行）
 
+    \b
     示例:
-        qcc health check
+        uvx qcc health check
     """
     try:
         from .proxy.server import ProxyServer
@@ -1389,11 +1547,11 @@ def health_check():
 
         if not server_info:
             print_status("代理服务器未运行", "error")
-            print("💡 使用 'qcc proxy start' 启动代理服务器")
+            safe_print("💡 使用 'uvx qcc proxy start' 启动代理服务器")
             return
 
         print_status("触发健康检查...", "loading")
-        print("💡 健康检查将在后台执行，请稍后使用 'qcc health metrics' 查看结果")
+        safe_print("💡 健康检查将在后台执行，请稍后使用 'uvx qcc health metrics' 查看结果")
 
     except Exception as e:
         print_status(f"执行健康检查失败: {e}", "error")
@@ -1403,8 +1561,9 @@ def health_check():
 def health_status():
     """查看所有 endpoint 的健康状态
 
+    \b
     示例:
-        qcc health status
+        uvx qcc health status
     """
     try:
         from pathlib import Path
@@ -1418,7 +1577,7 @@ def health_status():
 
         if not metrics_file.exists():
             print_status("暂无健康状态数据", "warning")
-            print("💡 启动代理服务器后会自动收集健康数据")
+            safe_print("💡 启动代理服务器后会自动收集健康数据")
             return
 
         with open(metrics_file, 'r') as f:
@@ -1462,9 +1621,9 @@ def health_status():
         # 显示汇总
         print_separator()
         total = healthy_count + unhealthy_count + unknown_count
-        print(f"📊 汇总: {total} 个 endpoint")
-        print(f"   ✅ 健康: {healthy_count}")
-        print(f"   ⚠️  警告/不健康: {unhealthy_count}")
+        safe_print(f"📊 汇总: {total} 个 endpoint")
+        safe_print(f"   ✅ 健康: {healthy_count}")
+        safe_print(f"   ⚠️  警告/不健康: {unhealthy_count}")
 
     except Exception as e:
         print_status(f"查看状态失败: {e}", "error")
@@ -1476,9 +1635,10 @@ def health_status():
 def health_history(endpoint_id, limit):
     """查看 endpoint 的健康检查历史
 
+    \b
     示例:
-        qcc health history endpoint-1
-        qcc health history endpoint-1 -n 50
+        uvx qcc health history endpoint-1
+        uvx qcc health history endpoint-1 -n 50
     """
     try:
         from pathlib import Path
@@ -1539,10 +1699,11 @@ def health_history(endpoint_id, limit):
 def health_config(interval, enable_weight_adjustment, disable_weight_adjustment, min_checks):
     """配置健康检测参数
 
+    \b
     示例:
-        qcc health config --interval 60
-        qcc health config --enable-weight-adjustment
-        qcc health config --min-checks 5
+        uvx qcc health config --interval 60
+        uvx qcc health config --enable-weight-adjustment
+        uvx qcc health config --min-checks 5
     """
     try:
         from pathlib import Path
@@ -1591,7 +1752,7 @@ def health_config(interval, enable_weight_adjustment, disable_weight_adjustment,
             print(f"  权重调整: {'启用' if config['enable_weight_adjustment'] else '禁用'}")
             print(f"  最少检查次数: {config['min_checks_before_adjustment']}")
             print()
-            print("💡 使用选项修改配置，例如: qcc health config --interval 120")
+            safe_print("💡 使用选项修改配置，例如: uvx qcc health config --interval 120")
             return
 
         # 保存配置
@@ -1605,7 +1766,7 @@ def health_config(interval, enable_weight_adjustment, disable_weight_adjustment,
         print(f"  权重调整: {'启用' if config['enable_weight_adjustment'] else '禁用'}")
         print(f"  最少检查次数: {config['min_checks_before_adjustment']}")
         print()
-        print("💡 重启代理服务器以应用新配置")
+        safe_print("💡 重启代理服务器以应用新配置")
 
     except Exception as e:
         print_status(f"配置失败: {e}", "error")
@@ -1710,18 +1871,18 @@ def _start_cluster_and_claude(cluster_name: str, host: str, port: int, config_ma
 
         print()
         print_separator()
-        print("✅ 集群配置已激活！")
+        safe_print("✅ 集群配置已激活！")
         print()
-        print(f"📊 集群状态:")
+        safe_print(f"📊 集群状态:")
         print(f"   配置: {cluster_name}")
         print(f"   代理: {proxy_url}")
         print(f"   Endpoints: 已加载")
         print()
-        print("💡 使用方法:")
+        safe_print("💡 使用方法:")
         print("   1. Claude Code 将通过代理服务器访问所有 endpoints")
         print("   2. 代理服务器会自动进行负载均衡和故障转移")
-        print("   3. 查看代理状态: qcc proxy status")
-        print("   4. 查看健康状态: qcc health status")
+        print("   3. 查看代理状态: uvx qcc proxy status")
+        print("   4. 查看健康状态: uvx qcc health status")
         print()
 
         # 启动 Claude Code
@@ -1733,7 +1894,7 @@ def _start_cluster_and_claude(cluster_name: str, host: str, port: int, config_ma
                                   capture_output=True, text=True, shell=is_windows)
 
             if result.returncode == 0:
-                print("🚀 正在启动 Claude Code...")
+                safe_print("🚀 正在启动 Claude Code...")
                 subprocess.run(['claude'], shell=is_windows)
             else:
                 print_status("未找到 Claude Code，请先安装", "warning")
@@ -1743,7 +1904,7 @@ def _start_cluster_and_claude(cluster_name: str, host: str, port: int, config_ma
             print("   下载地址: https://claude.ai/code")
 
     except KeyboardInterrupt:
-        print("\n👋 退出 Claude Code")
+        safe_print("\n👋 退出 Claude Code")
     except Exception as e:
         print_status(f"启动失败: {e}", "error")
         import traceback
@@ -1762,14 +1923,19 @@ def endpoint():
 @click.argument('cluster_name')
 @click.option('--host', default='127.0.0.1', help='代理服务器监听地址')
 @click.option('--port', default=7860, help='代理服务器监听端口')
-@click.option('--no-auto-start', is_flag=True, help='不自动启动代理服务器和 Claude Code')
-def endpoint_add(cluster_name, host, port, no_auto_start):
+@click.option('--no-auto-start', is_flag=True, default=True, help='不自动启动代理服务器和 Claude Code（默认）')
+@click.option('--auto-start', is_flag=True, help='创建后立即启动代理服务器和 Claude Code')
+def endpoint_add(cluster_name, host, port, no_auto_start, auto_start):
     """创建 Endpoint 集群配置
 
+    \b
     示例:
-        qcc endpoint add production                    # 创建 production 集群
-        qcc endpoint add production --no-auto-start    # 创建但不自动启动
+        uvx qcc endpoint add production                # 创建集群（默认不启动）
+        uvx qcc endpoint add production --auto-start   # 创建并立即启动
     """
+    # 如果指定了 --auto-start，则覆盖默认的 no_auto_start
+    if auto_start:
+        no_auto_start = False
     try:
         from .core.config import ConfigManager, ConfigProfile
         from .core.endpoint import Endpoint
@@ -1777,13 +1943,22 @@ def endpoint_add(cluster_name, host, port, no_auto_start):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
+
+        # 确保存储后端已初始化
+        if not config_manager.storage_backend:
+            if not config_manager.initialize_storage_backend():
+                print_status("存储后端初始化失败", "error")
+                return
+
+        # 从云端同步最新配置
+        config_manager.sync_from_cloud()
 
         # 检查集群配置是否已存在
         if config_manager.get_profile(cluster_name):
             print_status(f"配置 '{cluster_name}' 已存在", "error")
-            print("💡 使用其他名称或删除现有配置: qcc remove " + cluster_name)
+            safe_print(f"💡 使用其他名称或删除现有配置: uvx qcc remove {cluster_name}（本地测试: uvx --from . qcc remove {cluster_name}）")
             return
 
         print_header(f"创建 Endpoint 集群配置: {cluster_name}")
@@ -1792,7 +1967,7 @@ def endpoint_add(cluster_name, host, port, no_auto_start):
         profiles = config_manager.list_profiles()
         if not profiles:
             print_status("暂无可用配置", "warning")
-            print("💡 请先添加配置: qcc add <名称>")
+            safe_print("💡 请先添加配置: uvx qcc add <名称>（本地测试: uvx --from . qcc add <名称>）")
             return
 
         # 步骤 1: 选择主节点
@@ -1909,14 +2084,14 @@ def endpoint_add(cluster_name, host, port, no_auto_start):
 
         # 询问是否立即启动
         if no_auto_start:
-            print("💡 稍后可使用以下命令启动:")
-            print(f"   qcc proxy start --cluster {cluster_name}")
+            safe_print("💡 稍后可使用以下命令启动:")
+            print(f"   uvx qcc proxy start --cluster {cluster_name}")
             return
 
         if not confirm_action("是否立即启动代理服务器和 Claude Code？", default=True):
             print_status("配置已保存", "info")
-            print("💡 稍后可使用以下命令启动:")
-            print(f"   qcc proxy start --cluster {cluster_name}")
+            safe_print("💡 稍后可使用以下命令启动:")
+            print(f"   uvx qcc proxy start --cluster {cluster_name}")
             return
 
         # 启动代理服务器和 Claude Code
@@ -1937,8 +2112,9 @@ def endpoint_add(cluster_name, host, port, no_auto_start):
 def endpoint_list(config_name):
     """列出配置的所有 endpoint
 
+    \b
     示例:
-        qcc endpoint list production
+        uvx qcc endpoint list production
     """
     try:
         from .core.config import ConfigManager
@@ -1946,7 +2122,7 @@ def endpoint_list(config_name):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         profile = config_manager.get_profile(config_name)
@@ -1958,7 +2134,7 @@ def endpoint_list(config_name):
 
         if not hasattr(profile, 'endpoints') or not profile.endpoints:
             print_status("该配置暂无 endpoint", "warning")
-            print("💡 使用 'qcc endpoint add' 添加 endpoint")
+            safe_print("💡 使用 'uvx qcc endpoint add' 添加 endpoint")
             return
 
         print(f"共 {len(profile.endpoints)} 个 endpoint:\n")
@@ -1977,8 +2153,9 @@ def endpoint_list(config_name):
 def endpoint_remove(config_name, endpoint_id):
     """删除指定的 endpoint
 
+    \b
     示例:
-        qcc endpoint remove production abc12345
+        uvx qcc endpoint remove production abc12345
     """
     try:
         from .core.config import ConfigManager
@@ -1986,7 +2163,7 @@ def endpoint_remove(config_name, endpoint_id):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         profile = config_manager.get_profile(config_name)
@@ -2034,10 +2211,11 @@ def priority():
 def priority_set(profile_name, level):
     """设置配置的优先级
 
+    \b
     示例:
-        qcc priority set production primary      # 设置为主配置
-        qcc priority set backup secondary        # 设置为次配置
-        qcc priority set emergency fallback      # 设置为兜底配置
+        uvx qcc priority set production primary      # 设置为主配置
+        uvx qcc priority set backup secondary        # 设置为次配置
+        uvx qcc priority set emergency fallback      # 设置为兜底配置
     """
     try:
         from .core.config import ConfigManager
@@ -2046,7 +2224,7 @@ def priority_set(profile_name, level):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         # 初始化 PriorityManager
@@ -2067,8 +2245,9 @@ def priority_set(profile_name, level):
 def priority_list():
     """查看优先级配置
 
+    \b
     示例:
-        qcc priority list
+        uvx qcc priority list
     """
     try:
         from .core.config import ConfigManager
@@ -2077,7 +2256,7 @@ def priority_list():
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         priority_manager = PriorityManager(config_manager=config_manager)
@@ -2118,8 +2297,9 @@ def priority_list():
 def priority_switch(profile_name):
     """手动切换到指定配置
 
+    \b
     示例:
-        qcc priority switch backup
+        uvx qcc priority switch backup
     """
     try:
         from .core.config import ConfigManager
@@ -2128,7 +2308,7 @@ def priority_switch(profile_name):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         priority_manager = PriorityManager(config_manager=config_manager)
@@ -2147,9 +2327,10 @@ def priority_switch(profile_name):
 def priority_history(limit):
     """查看切换历史
 
+    \b
     示例:
-        qcc priority history
-        qcc priority history -n 20
+        uvx qcc priority history
+        uvx qcc priority history -n 20
     """
     try:
         from .core.config import ConfigManager
@@ -2158,7 +2339,7 @@ def priority_history(limit):
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         priority_manager = PriorityManager(config_manager=config_manager)
@@ -2204,9 +2385,10 @@ def priority_policy(auto_failover, no_auto_failover, auto_recovery,
                    no_auto_recovery, failure_threshold, cooldown):
     """配置故障转移策略
 
+    \b
     示例:
-        qcc priority policy --auto-failover --auto-recovery
-        qcc priority policy --failure-threshold 3 --cooldown 300
+        uvx qcc priority policy --auto-failover --auto-recovery
+        uvx qcc priority policy --failure-threshold 3 --cooldown 300
     """
     try:
         from .core.config import ConfigManager
@@ -2215,7 +2397,7 @@ def priority_policy(auto_failover, no_auto_failover, auto_recovery,
         config_manager = ConfigManager()
 
         if not config_manager.user_id:
-            print_status("请先运行 'qcc init' 初始化配置", "error")
+            print_status("请先运行 'uvx qcc init' 初始化配置（本地测试: uvx --from . qcc init）", "error")
             return
 
         priority_manager = PriorityManager(config_manager=config_manager)
@@ -2281,7 +2463,7 @@ def queue_status():
 
         if not queue_file.exists():
             print_status("失败队列为空", "info")
-            print("💡 队列中的请求会在代理服务器运行时自动重试")
+            safe_print("💡 队列中的请求会在代理服务器运行时自动重试")
             return
 
         with open(queue_file, 'r') as f:
@@ -2291,7 +2473,7 @@ def queue_status():
         queue_items = data.get('queue', [])
 
         # 显示统计信息
-        print("📊 统计信息:")
+        safe_print("📊 统计信息:")
         print(f"  队列大小: {len(queue_items)}")
         print(f"  总入队数: {stats.get('total_enqueued', 0)}")
         print(f"  总重试数: {stats.get('total_retried', 0)}")
@@ -2301,7 +2483,7 @@ def queue_status():
 
         # 显示队列项状态分布
         pending = sum(1 for item in queue_items if item.get('status') == 'pending')
-        print(f"📋 队列状态:")
+        safe_print(f"📋 队列状态:")
         print(f"  待重试: {pending} 个")
         print()
 
@@ -2310,7 +2492,7 @@ def queue_status():
             print(f"⏰ 最后更新: {updated_at[:19].replace('T', ' ')}")
 
         print()
-        print("💡 使用 'qcc queue list' 查看详细列表")
+        safe_print("💡 使用 'uvx qcc queue list' 查看详细列表")
 
     except Exception as e:
         print_status(f"查看队列状态失败: {e}", "error")
@@ -2321,9 +2503,10 @@ def queue_status():
 def queue_list(limit):
     """列出队列中的请求
 
+    \b
     示例:
-        qcc queue list
-        qcc queue list -n 50
+        uvx qcc queue list
+        uvx qcc queue list -n 50
     """
     try:
         from pathlib import Path
@@ -2375,7 +2558,7 @@ def queue_list(limit):
 
         print(f"显示 {len(display_items)} 个请求（共 {len(queue_items)} 个）")
         print()
-        print("💡 使用 'qcc queue retry <request-id>' 手动重试")
+        safe_print("💡 使用 'uvx qcc queue retry <request-id>' 手动重试")
 
     except Exception as e:
         print_status(f"列出队列失败: {e}", "error")
@@ -2386,8 +2569,9 @@ def queue_list(limit):
 def queue_retry(request_id):
     """手动重试指定请求
 
+    \b
     示例:
-        qcc queue retry retry-123
+        uvx qcc queue retry retry-123
     """
     try:
         print_header("手动重试请求")
@@ -2399,12 +2583,12 @@ def queue_retry(request_id):
 
         if not server_info:
             print_status("代理服务器未运行", "error")
-            print("💡 手动重试需要代理服务器运行")
-            print("   使用 'qcc proxy start' 启动代理服务器")
+            safe_print("💡 手动重试需要代理服务器运行")
+            print("   使用 'uvx qcc proxy start' 启动代理服务器")
             return
 
         print_status(f"触发重试请求: {request_id}", "loading")
-        print("💡 重试将在后台执行，请稍后使用 'qcc queue status' 查看结果")
+        safe_print("💡 重试将在后台执行，请稍后使用 'uvx qcc queue status' 查看结果")
 
     except Exception as e:
         print_status(f"重试失败: {e}", "error")
@@ -2414,8 +2598,9 @@ def queue_retry(request_id):
 def queue_retry_all():
     """重试所有待处理的请求
 
+    \b
     示例:
-        qcc queue retry-all
+        uvx qcc queue retry-all
     """
     try:
         print_header("重试所有请求")
@@ -2427,8 +2612,8 @@ def queue_retry_all():
 
         if not server_info:
             print_status("代理服务器未运行", "error")
-            print("💡 批量重试需要代理服务器运行")
-            print("   使用 'qcc proxy start' 启动代理服务器")
+            safe_print("💡 批量重试需要代理服务器运行")
+            print("   使用 'uvx qcc proxy start' 启动代理服务器")
             return
 
         if not confirm_action("确认重试所有待处理的请求？", default=False):
@@ -2436,7 +2621,7 @@ def queue_retry_all():
             return
 
         print_status("触发批量重试...", "loading")
-        print("💡 重试将在后台执行，请稍后使用 'qcc queue status' 查看结果")
+        safe_print("💡 重试将在后台执行，请稍后使用 'uvx qcc queue status' 查看结果")
 
     except KeyboardInterrupt:
         print_status("\n操作取消", "warning")
@@ -2496,10 +2681,10 @@ def main():
     try:
         cli()
     except KeyboardInterrupt:
-        print("\n👋 再见！")
+        safe_print("\n👋 再见！")
         sys.exit(0)
     except Exception as e:
-        print(f"❌ 程序错误: {e}")
+        safe_print(f"❌ 程序错误: {e}")
         sys.exit(1)
 
 

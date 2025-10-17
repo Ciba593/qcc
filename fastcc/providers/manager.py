@@ -51,20 +51,20 @@ class ProvidersManager:
                     **provider_info
                 )
             
-            print(f"✅ 已获取 {len(self.providers)} 个厂商配置")
+            print(f"[OK] 已获取 {len(self.providers)} 个厂商配置")
             return True
             
         except requests.RequestException as e:
             self._last_error = f"网络请求失败: {e}"
-            print(f"❌ {self._last_error}")
+            print(f"[X] {self._last_error}")
             return False
         except json.JSONDecodeError as e:
             self._last_error = f"配置格式错误: {e}"
-            print(f"❌ {self._last_error}")
+            print(f"[X] {self._last_error}")
             return False
         except Exception as e:
             self._last_error = f"获取配置失败: {e}"
-            print(f"❌ {self._last_error}")
+            print(f"[X] {self._last_error}")
             return False
     
     def get_providers(self) -> List[Provider]:

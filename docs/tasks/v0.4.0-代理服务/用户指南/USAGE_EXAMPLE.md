@@ -24,19 +24,21 @@
 
 #### 交互式命令使用
 ```bash
-# 交互式选择默认配置
-qcc default
+# 本地开发测试
+uvx --from . qcc default                # 交互式选择默认配置
+uvx --from . qcc remove                 # 交互式删除配置
+uvx --from . qcc use                    # 交互式选择并启动配置
+uvx --from . qcc default <配置名>       # 传统方式（依然支持）
+uvx --from . qcc remove <配置名>        # 传统方式
+uvx --from . qcc use <配置名>           # 传统方式
 
-# 交互式删除配置
-qcc remove
-
-# 交互式选择并启动配置
-qcc use
-
-# 传统方式（依然支持）
-qcc default <配置名>
-qcc remove <配置名>
-qcc use <配置名>
+# 远程安装使用
+uvx qcc default                         # 交互式选择默认配置
+uvx qcc remove                          # 交互式删除配置
+uvx qcc use                             # 交互式选择并启动配置
+uvx qcc default <配置名>                # 传统方式（依然支持）
+uvx qcc remove <配置名>                 # 传统方式
+uvx qcc use <配置名>                    # 传统方式
 ```
 
 #### 编程接口使用

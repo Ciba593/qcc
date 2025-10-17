@@ -29,7 +29,7 @@ class OAuthHandler(BaseHTTPRequestHandler):
             <html>
             <head><title>认证成功</title></head>
             <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-                <h1 style="color: green;">🎉 认证成功！</h1>
+                <h1 style="color: green;">[!] 认证成功！</h1>
                 <p>您已成功授权FastCC访问您的GitHub账户。</p>
                 <p>现在可以关闭此页面，返回终端继续操作。</p>
             </body>
@@ -47,7 +47,7 @@ class OAuthHandler(BaseHTTPRequestHandler):
             <html>
             <head><title>认证失败</title></head>
             <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
-                <h1 style="color: red;">❌ 认证失败</h1>
+                <h1 style="color: red;">[X] 认证失败</h1>
                 <p>错误信息: {error}</p>
                 <p>请关闭此页面，返回终端重试。</p>
             </body>
@@ -94,12 +94,12 @@ class GitHubOAuth:
             expires_in = device_response.get('expires_in', 900)
             interval = device_response.get('interval', 5)
             
-            print(f"\n📋 请按以下步骤完成认证：")
+            print(f"\n[L] 请按以下步骤完成认证：")
             print(f"1. 打开浏览器访问: {verification_uri}")
             print(f"2. 输入设备码: {user_code}")
             print(f"3. 完成GitHub授权")
             print(f"\n⏰ 该码在 {expires_in//60} 分钟内有效")
-            print(f"⏳ 等待授权...")
+            print(f"[...] 等待授权...")
             
             # 自动打开浏览器
             webbrowser.open(verification_uri)
@@ -108,7 +108,7 @@ class GitHubOAuth:
             return self._poll_for_token(device_code, interval, expires_in)
             
         except Exception as e:
-            print(f"❌ 启动认证流程失败: {e}")
+            print(f"[X] 启动认证流程失败: {e}")
             return False
     
     def _get_device_code(self) -> Optional[Dict[str, Any]]:
@@ -134,7 +134,7 @@ class GitHubOAuth:
             return response.json()
             
         except Exception as e:
-            print(f"❌ 获取设备码失败: {e}")
+            print(f"[X] 获取设备码失败: {e}")
             return None
     
     def _poll_for_token(self, device_code: str, interval: int, expires_in: int) -> bool:
@@ -149,11 +149,11 @@ class GitHubOAuth:
                 
                 if response and 'access_token' in response:
                     self.access_token = response['access_token']
-                    print("✅ 认证成功！")
+                    print("[OK] 认证成功！")
                     return True
                 elif response and response.get('error') == 'authorization_pending':
                     # 继续等待
-                    print("⏳ 等待用户授权...", end='\r')
+                    print("[...] 等待用户授权...", end='\r')
                     time.sleep(interval)
                 elif response and response.get('error') == 'slow_down':
                     # 减慢轮询速度
@@ -161,19 +161,19 @@ class GitHubOAuth:
                     time.sleep(interval)
                 elif response and response.get('error'):
                     error = response.get('error_description', response['error'])
-                    print(f"❌ 认证失败: {error}")
+                    print(f"[X] 认证失败: {error}")
                     return False
                 else:
                     time.sleep(interval)
             
-            print("❌ 认证超时，请重试")
+            print("[X] 认证超时，请重试")
             return False
             
         except KeyboardInterrupt:
-            print("\n❌ 用户取消认证")
+            print("\n[X] 用户取消认证")
             return False
         except Exception as e:
-            print(f"❌ 轮询令牌失败: {e}")
+            print(f"[X] 轮询令牌失败: {e}")
             return False
     
     def _check_token(self, device_code: str) -> Optional[Dict[str, Any]]:
@@ -212,7 +212,7 @@ class GitHubOAuth:
             server.oauth_code = None
             server.oauth_error = None
             
-            print("⏳ 等待GitHub授权回调...")
+            print("[...] 等待GitHub授权回调...")
             print("请在浏览器中完成授权操作")
             
             # 在单独线程中运行服务器
@@ -227,14 +227,14 @@ class GitHubOAuth:
                 # 使用授权码获取访问令牌
                 return self._exchange_code_for_token(server.oauth_code)
             elif server.oauth_error:
-                print(f"❌ 授权失败: {server.oauth_error}")
+                print(f"[X] 授权失败: {server.oauth_error}")
                 return False
             else:
-                print("❌ 授权超时，请重试")
+                print("[X] 授权超时，请重试")
                 return False
                 
         except Exception as e:
-            print(f"❌ 等待授权回调失败: {e}")
+            print(f"[X] 等待授权回调失败: {e}")
             return False
     
     def _exchange_code_for_token(self, code: str) -> bool:
@@ -266,15 +266,15 @@ class GitHubOAuth:
             
             if 'access_token' in result:
                 self.access_token = result['access_token']
-                print("✅ 成功获取访问令牌")
+                print("[OK] 成功获取访问令牌")
                 return True
             else:
                 error = result.get('error_description', '未知错误')
-                print(f"❌ 获取访问令牌失败: {error}")
+                print(f"[X] 获取访问令牌失败: {error}")
                 return False
                 
         except Exception as e:
-            print(f"❌ 交换访问令牌失败: {e}")
+            print(f"[X] 交换访问令牌失败: {e}")
             return False
     
     def save_token(self) -> bool:
@@ -300,7 +300,7 @@ class GitHubOAuth:
             return True
             
         except Exception as e:
-            print(f"❌ 保存令牌失败: {e}")
+            print(f"[X] 保存令牌失败: {e}")
             return False
     
     @staticmethod
@@ -343,7 +343,7 @@ def authenticate_github() -> Optional[str]:
             )
             if response.status_code == 200:
                 user_info = response.json()
-                print(f"✅ 已使用缓存令牌登录为: {user_info.get('login', '未知用户')}")
+                print(f"[OK] 已使用缓存令牌登录为: {user_info.get('login', '未知用户')}")
                 return token
         except:
             pass

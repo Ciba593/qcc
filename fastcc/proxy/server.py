@@ -60,6 +60,7 @@ class ProxyServer:
         self.site: Optional[web.TCPSite] = None
         self.client_session: Optional[ClientSession] = None
         self.running = False
+        self._shutting_down = False  # 防止重复关闭
 
         # 后台任务
         self._health_monitor_task: Optional[asyncio.Task] = None
@@ -90,14 +91,18 @@ class ProxyServer:
     def _setup_signal_handlers(self):
         """设置信号处理器"""
         def signal_handler(signum, frame):
+            if self._shutting_down:
+                logger.debug(f"已在关闭中，忽略信号 {signum}")
+                return
             logger.info(f"收到信号 {signum}，准备关闭服务器...")
+            self._shutting_down = True
             asyncio.create_task(self.stop())
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
     async def handle_request(self, request: web.Request) -> web.Response:
-        """处理代理请求
+        """处理代理请求，支持自动重试和故障转移
 
         Args:
             request: 客户端请求
@@ -114,38 +119,78 @@ class ProxyServer:
             # 1. 读取请求体
             body = await request.read()
 
-            # 2. 选择 endpoint（通过负载均衡器）
-            endpoint = await self._select_endpoint()
-            if not endpoint:
-                logger.error(f"[{request_id}] 没有可用的 endpoint")
-                self.stats['failed_requests'] += 1
-                return web.Response(
-                    status=503,
-                    text=json.dumps({'error': 'No available endpoints'}),
-                    content_type='application/json'
+            # 2. 重试逻辑：最多尝试 3 次（初始 + 2 次重试）
+            max_retries = 2
+            last_response = None
+            last_endpoint = None
+
+            for retry_count in range(max_retries + 1):
+                # 选择 endpoint（通过负载均衡器）
+                endpoint = await self._select_endpoint()
+                if not endpoint:
+                    logger.error(f"[{request_id}] 没有可用的 endpoint")
+                    self.stats['failed_requests'] += 1
+                    return web.Response(
+                        status=503,
+                        text=json.dumps({'error': 'No available endpoints'}),
+                        content_type='application/json'
+                    )
+
+                if retry_count > 0:
+                    logger.info(f"[{request_id}] 重试 {retry_count}/{max_retries}, 选中 endpoint: {endpoint.id}")
+                else:
+                    logger.info(f"[{request_id}] 选中 endpoint: {endpoint.id} ({endpoint.base_url})")
+
+                last_endpoint = endpoint
+
+                # 3. 转发请求
+                response = await self._forward_request(
+                    endpoint=endpoint,
+                    method=request.method,
+                    path=request.path,
+                    headers=dict(request.headers),
+                    body=body,
+                    request_id=request_id,
+                    original_request=request
                 )
 
-            logger.info(f"[{request_id}] 选中 endpoint: {endpoint.id} ({endpoint.base_url})")
+                if response:
+                    last_response = response
+                    # 检查是否成功（只有 200 才算成功）
+                    if response.status == 200:
+                        self.stats['successful_requests'] += 1
+                        logger.info(f"[{request_id}] 请求成功: {response.status}")
+                        return response
+                    else:
+                        # 非 200 状态码，继续重试
+                        logger.warning(
+                            f"[{request_id}] 收到非成功响应: {response.status}, "
+                            f"剩余重试次数: {max_retries - retry_count}"
+                        )
+                        if retry_count < max_retries:
+                            continue  # 重试
+                        else:
+                            # 重试次数用完，返回最后一次响应
+                            self.stats['failed_requests'] += 1
+                            logger.error(f"[{request_id}] 重试 {max_retries} 次后仍失败，状态码: {response.status}")
+                            return response
+                else:
+                    # 请求失败（超时或异常）
+                    logger.error(f"[{request_id}] 请求失败，endpoint: {endpoint.id}")
+                    if retry_count < max_retries:
+                        continue  # 重试
+                    else:
+                        # 重试次数用完
+                        self.stats['failed_requests'] += 1
+                        logger.error(f"[{request_id}] 重试 {max_retries} 次后仍失败")
+                        return web.Response(
+                            status=502,
+                            text=json.dumps({'error': 'Bad Gateway - All retries failed'}),
+                            content_type='application/json'
+                        )
 
-            # 3. 转发请求 - 传递原始 request 对象以支持流式响应
-            response = await self._forward_request(
-                endpoint=endpoint,
-                method=request.method,
-                path=request.path,
-                headers=dict(request.headers),
-                body=body,
-                request_id=request_id,
-                original_request=request  # 添加原始请求对象
-            )
-
-            if response:
-                self.stats['successful_requests'] += 1
-                logger.info(f"[{request_id}] 请求成功: {response.status}")
-            else:
-                self.stats['failed_requests'] += 1
-                logger.error(f"[{request_id}] 请求失败")
-
-            return response if response else web.Response(
+            # 理论上不应该到这里
+            return last_response if last_response else web.Response(
                 status=502,
                 text=json.dumps({'error': 'Bad Gateway'}),
                 content_type='application/json'
@@ -296,10 +341,17 @@ class ProxyServer:
             # 构建目标 URL
             target_url = f"{endpoint.base_url}{path}"
 
-            # 修改请求头
+            # 修改请求头：同时支持 Anthropic 和 OpenAI 格式
             forward_headers = headers.copy()
-            # 使用 endpoint 的 API Key
+
+            # 同时发送两种认证方式，确保兼容性
+            # Anthropic 原生格式
+            forward_headers['x-api-key'] = endpoint.api_key
+            forward_headers['anthropic-version'] = '2023-06-01'
+
+            # OpenAI 兼容格式
             forward_headers['Authorization'] = f'Bearer {endpoint.api_key}'
+
             # 移除不需要的头
             forward_headers.pop('Host', None)
             forward_headers.pop('Connection', None)
@@ -360,18 +412,33 @@ class ProxyServer:
                     # 计算响应时间
                     response_time = (datetime.now() - start_time).total_seconds() * 1000
 
+                    # 检查状态码，只有 200 才算成功
+                    is_success = response.status == 200
+
                     # 更新 endpoint 健康状态
                     endpoint.update_health_status(
-                        status='healthy',
+                        status='healthy' if is_success else 'unhealthy',
                         increment_requests=True,
-                        is_failure=False,
+                        is_failure=not is_success,
                         response_time=response_time
                     )
 
-                    logger.debug(
-                        f"[{request_id}] 响应: {response.status}, "
-                        f"耗时: {response_time:.2f}ms"
-                    )
+                    if is_success:
+                        logger.debug(
+                            f"[{request_id}] 响应成功: {response.status}, "
+                            f"耗时: {response_time:.2f}ms"
+                        )
+                    else:
+                        logger.warning(
+                            f"[{request_id}] 响应失败: {response.status}, "
+                            f"耗时: {response_time:.2f}ms"
+                        )
+                        # 将失败的 endpoint 加入验证队列
+                        if self.failure_queue:
+                            self.failure_queue.add_failed_endpoint(
+                                endpoint.id,
+                                f"HTTP {response.status}"
+                            )
 
                     # 构建代理响应
                     proxy_response = web.Response(
@@ -435,8 +502,8 @@ class ProxyServer:
             self.running = True
             self.stats['start_time'] = datetime.now().isoformat()
 
-            logger.info(f"✓ 代理服务器已启动: http://{self.host}:{self.port}")
-            print(f"✓ 代理服务器已启动: http://{self.host}:{self.port}")
+            logger.info(f"[OK] 代理服务器已启动: http://{self.host}:{self.port}")
+            print(f"[OK] 代理服务器已启动: http://{self.host}:{self.port}")
 
             # 注释掉主动健康监控器（改为被动检测）
             # if self.health_monitor:
@@ -445,8 +512,8 @@ class ProxyServer:
             #         self._health_monitor_task = asyncio.create_task(
             #             self.health_monitor.start(endpoints)
             #         )
-            #         logger.info("✓ 健康监控器已启动")
-            #         print("✓ 健康监控器已启动")
+            #         logger.info("[OK] 健康监控器已启动")
+            #         print("[OK] 健康监控器已启动")
 
             # 启动故障转移管理器（后台任务）
             if self.failover_manager:
@@ -455,18 +522,20 @@ class ProxyServer:
                     self._failover_manager_task = asyncio.create_task(
                         self.failover_manager.start()
                     )
-                    logger.info("✓ 故障转移监控已启动")
-                    print("✓ 故障转移监控已启动")
+                    logger.info("[OK] 故障转移监控已启动")
+                    print("[OK] 故障转移监控已启动")
 
             # 启动失败队列处理器（后台任务）
             if self.failure_queue:
+                # 清空历史失败记录（每次启动时重新开始）
+                self.failure_queue.clear()
                 # 获取所有 endpoints 用于验证
                 all_endpoints = self._get_all_endpoints()
                 self._failure_queue_task = asyncio.create_task(
                     self.failure_queue.process_queue(all_endpoints)
                 )
-                logger.info("✓ 失败队列处理器已启动")
-                print("✓ 失败队列处理器已启动")
+                logger.info("[OK] 失败队列处理器已启动")
+                print("[OK] 失败队列处理器已启动")
 
             # 保持运行
             try:
@@ -502,7 +571,7 @@ class ProxyServer:
                 except asyncio.CancelledError:
                     pass
             self._failure_queue_task = None
-            logger.info("✓ 失败队列处理器已停止")
+            logger.info("[OK] 失败队列处理器已停止")
 
         # 停止故障转移管理器
         if self.failover_manager and self._failover_manager_task:
@@ -514,7 +583,7 @@ class ProxyServer:
                 except asyncio.CancelledError:
                     pass
             self._failover_manager_task = None
-            logger.info("✓ 故障转移管理器已停止")
+            logger.info("[OK] 故障转移管理器已停止")
 
         # 停止健康监控器
         if self.health_monitor and self._health_monitor_task:
@@ -526,7 +595,7 @@ class ProxyServer:
                 except asyncio.CancelledError:
                     pass
             self._health_monitor_task = None
-            logger.info("✓ 健康监控器已停止")
+            logger.info("[OK] 健康监控器已停止")
 
         # 关闭客户端会话
         if self.client_session:
@@ -545,8 +614,8 @@ class ProxyServer:
         # 删除 PID 文件
         self._remove_pid()
 
-        logger.info("✓ 代理服务器已停止")
-        print("✓ 代理服务器已停止")
+        logger.info("[OK] 代理服务器已停止")
+        print("[OK] 代理服务器已停止")
 
     def get_stats(self) -> Dict[str, Any]:
         """获取统计信息"""

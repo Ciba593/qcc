@@ -84,14 +84,15 @@ PYTHONPATH=$PWD python examples/health_check_demo.py
 ### 查看帮助
 
 ```bash
-# 查看 health 命令组
-python -m fastcc.cli health --help
+# 本地开发测试
+uvx --from . qcc health --help           # 查看 health 命令组
+uvx --from . qcc health test --help      # 查看 test 子命令
+uvx --from . qcc health metrics --help   # 查看 metrics 子命令
 
-# 查看 test 子命令
-python -m fastcc.cli health test --help
-
-# 查看 metrics 子命令
-python -m fastcc.cli health metrics --help
+# 远程安装使用
+uvx qcc health --help                    # 查看 health 命令组
+uvx qcc health test --help               # 查看 test 子命令
+uvx qcc health metrics --help            # 查看 metrics 子命令
 ```
 
 ### 测试命令（需要配置 endpoints）
@@ -99,20 +100,19 @@ python -m fastcc.cli health metrics --help
 ```bash
 # 注意：以下命令需要先配置 endpoints 才能真正使用
 
-# 执行健康测试
-python -m fastcc.cli health test
+# 本地开发测试
+uvx --from . qcc health test             # 执行健康测试
+uvx --from . qcc health test endpoint-1  # 测试指定 endpoint
+uvx --from . qcc health test -v          # 显示详细信息
+uvx --from . qcc health metrics          # 查看性能指标
+uvx --from . qcc health metrics endpoint-1  # 查看指定 endpoint 的指标
 
-# 测试指定 endpoint
-python -m fastcc.cli health test endpoint-1
-
-# 显示详细信息
-python -m fastcc.cli health test -v
-
-# 查看性能指标
-python -m fastcc.cli health metrics
-
-# 查看指定 endpoint 的指标
-python -m fastcc.cli health metrics endpoint-1
+# 远程安装使用
+uvx qcc health test                      # 执行健康测试
+uvx qcc health test endpoint-1           # 测试指定 endpoint
+uvx qcc health test -v                   # 显示详细信息
+uvx qcc health metrics                   # 查看性能指标
+uvx qcc health metrics endpoint-1        # 查看指定 endpoint 的指标
 ```
 
 ---

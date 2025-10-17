@@ -18,6 +18,65 @@ from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.formatted_text import FormattedText
 
 
+# Windows emoji 兼容性检测
+def _supports_emoji() -> bool:
+    """检测当前终端是否支持 emoji"""
+    if not sys.platform.startswith('win'):
+        return True
+
+    # Windows 10+ 的新终端（Windows Terminal）支持 emoji
+    # 检查 WT_SESSION 环境变量
+    import os
+    if os.environ.get('WT_SESSION'):
+        return True
+
+    # 检查是否在 VSCode 集成终端中
+    if os.environ.get('TERM_PROGRAM') == 'vscode':
+        return True
+
+    # 默认 Windows 控制台不支持 emoji
+    return False
+
+
+# 图标映射：emoji -> ASCII 回退
+_ICON_MAP = {
+    "🚀": "[>>]",
+    "✅": "[OK]",
+    "❌": "[X]",
+    "⚠️": "[!]",
+    "ℹ️": "[i]",
+    "⏳": "[...]",
+    "⭐": "*",
+    "🔄": "[~]",
+    "💰": "[$]",
+    "📊": "[#]",
+    "🎯": "[*]",
+    "💡": "[?]",
+    "🔧": "[+]",
+    "📝": "[=]",
+    "🎉": "[!]",
+    "📋": "[L]",
+    "👋": "[>]",
+    "⚙️": "[*]",
+    "🗑️": "[D]",
+    "⏱️": "[T]",
+    "🚫": "[B]",
+    "❓": "[?]",
+    "🔥": "[F]",
+    "⚡": "[Z]",
+    "🛡️": "[S]",
+    "👤": "[U]",
+    "🤖": "[R]",
+}
+
+
+def safe_icon(emoji: str) -> str:
+    """安全地返回图标，在不支持 emoji 的终端上回退到 ASCII"""
+    if _supports_emoji():
+        return emoji
+    return _ICON_MAP.get(emoji, emoji)
+
+
 def prompt_with_timeout(message: str, timeout: int = 3, default: str = "") -> str:
     """带超时的用户输入提示
     
@@ -100,7 +159,7 @@ def select_from_list(items: List[str], prompt: str = "请选择",
         return _interactive_select(items, prompt, timeout, default_index)
     except Exception as e:
         # 如果新UI失败，回退到原来的实现
-        print(f"⚠️ 终端UI启动失败，使用简化模式: {e}")
+        print(f"{safe_icon('⚠️')} 终端UI启动失败，使用简化模式: {e}")
         return _fallback_select(items, prompt, timeout, default_index)
 
 
@@ -165,12 +224,8 @@ def _interactive_select(items: List[str], prompt: str, timeout: int, default_ind
         # 添加选项列表
         for i, item in enumerate(items):
             if i == state.current_index:
-                if sys.platform.startswith('win'):
-                    marker = ">"
-                    lines.append(("class:selected", f"{marker} {i + 1}. {item}\n"))
-                else:
-                    marker = "⭐"
-                    lines.append(("class:selected", f"{marker} {i + 1}. {item}\n"))
+                marker = safe_icon("⭐") if not sys.platform.startswith('win') else ">"
+                lines.append(("class:selected", f"{marker} {i + 1}. {item}\n"))
             else:
                 lines.append(("", f"  {i + 1}. {item}\n"))
         
@@ -240,9 +295,7 @@ def _fallback_select(items: List[str], prompt: str, timeout: int, default_index:
     # 显示选择列表
     console.print(f"\n{prompt}:")
     for i, item in enumerate(items):
-        marker = "⭐" if i == default_index else "  "
-        if sys.platform.startswith('win'):
-            marker = "*" if i == default_index else " "
+        marker = safe_icon("⭐") if i == default_index else "  "
         console.print(f"{marker} {i + 1}. {item}")
     
     # 显示提示信息
@@ -260,14 +313,14 @@ def _fallback_select(items: List[str], prompt: str, timeout: int, default_index:
             if 1 <= choice <= len(items):
                 return choice - 1
             else:
-                console.print(f"❌ 无效选择: {choice}")
+                console.print(f"{safe_icon('❌')} 无效选择: {choice}")
                 return -1
         except ValueError:
-            console.print(f"❌ 无效输入: {user_input}")
+            console.print(f"{safe_icon('❌')} 无效输入: {user_input}")
             return -1
-            
+
     except KeyboardInterrupt:
-        console.print("\n❌ 操作取消")
+        console.print(f"\n{safe_icon('❌')} 操作取消")
         return -1
 
 
@@ -294,20 +347,20 @@ def show_loading(message: str, duration: float = 1.0):
                 time.sleep(0.1)
                 i += 1
         
-        console.print(f'✅ {message}完成', style="green")
+        console.print(f'{safe_icon("✅")} {message}完成', style="green")
     except ImportError:
         # 回退到原来的实现
         frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
         end_time = time.time() + duration
-        
+
         i = 0
         while time.time() < end_time:
             frame = frames[i % len(frames)]
             print(f'\r{frame} {message}', end='', flush=True)
             time.sleep(0.1)
             i += 1
-        
-        print(f'\r✅ {message}完成')
+
+        print(f'\r{safe_icon("✅")} {message}完成')
 
 
 def confirm_action(message: str, default: bool = False) -> bool:
@@ -318,7 +371,7 @@ def confirm_action(message: str, default: bool = False) -> bool:
     try:
         response = console.input(f"{message} ({default_text}): ").strip().lower()
     except (KeyboardInterrupt, EOFError):
-        console.print("\n❌ 操作取消")
+        console.print(f"\n{safe_icon('❌')} 操作取消")
         return False
     
     if not response:
@@ -329,37 +382,39 @@ def confirm_action(message: str, default: bool = False) -> bool:
 
 def print_status(message: str, status: str = "info"):
     """打印状态信息"""
-    console = Console()
-    
-    styles = {
-        "info": "blue",
-        "success": "green", 
-        "warning": "yellow",
-        "error": "red",
-        "loading": "cyan"
-    }
-    
     icons = {
         "info": "ℹ️",
         "success": "✅",
-        "warning": "⚠️", 
+        "warning": "⚠️",
         "error": "❌",
         "loading": "⏳"
     }
-    
-    icon = icons.get(status, "ℹ️")
-    style = styles.get(status, "blue")
-    
-    console.print(f"{icon} {message}", style=style)
+
+    icon = safe_icon(icons.get(status, "ℹ️"))
+
+    # 使用普通 print 避免 Windows Console 编码问题
+    try:
+        print(f"{icon} {message}")
+    except UnicodeEncodeError:
+        # 如果仍然失败，使用 ASCII 安全的输出
+        safe_text = f"{icon} {message}".encode('ascii', errors='replace').decode('ascii')
+        print(safe_text)
 
 
 def print_header(title: str):
     """打印标题头"""
-    console = Console()
-    
-    console.print(f"\n{'=' * 50}", style="cyan")
-    console.print(f"🚀 {title}", style="bold cyan")
-    console.print(f"{'=' * 50}", style="cyan")
+    # 使用普通 print 避免 Windows Console 编码问题
+    try:
+        print(f"\n{'=' * 50}")
+        print(f"{safe_icon('🚀')} {title}")
+        print(f"{'=' * 50}")
+    except UnicodeEncodeError:
+        # 如果仍然失败，使用 ASCII 安全的输出
+        icon = safe_icon('🚀')
+        safe_text = f"{icon} {title}".encode('ascii', errors='replace').decode('ascii')
+        print(f"\n{'=' * 50}")
+        print(safe_text)
+        print(f"{'=' * 50}")
 
 
 def print_separator():

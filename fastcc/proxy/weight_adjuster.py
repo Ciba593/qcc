@@ -182,7 +182,7 @@ class DynamicWeightAdjuster:
             change_pct = (change / current_weight) * 100
 
             logger.info(
-                f"📊 权重调整: {endpoint.id}\n"
+                f"[#] 权重调整: {endpoint.id}\n"
                 f"   当前权重: {current_weight:.2f}\n"
                 f"   新权重: {new_weight:.2f} ({change:+.2f}, {change_pct:+.1f}%)\n"
                 f"   原因:\n"

@@ -40,6 +40,8 @@
 
 ## 🎯 核心功能概览
 
+**注意**: 本文档描述的是 v0.4.0 的设计规划，部分功能可能与当前实现有差异。
+
 ### 1. Claude Code 代理服务 🚀
 提供本地代理服务器，拦截和转发 Claude Code 的 API 请求。
 
@@ -51,10 +53,17 @@
 
 **CLI 命令:**
 ```bash
-qcc proxy start              # 启动代理服务
-qcc proxy stop               # 停止代理服务
-qcc proxy status             # 查看代理状态
-qcc proxy logs               # 查看代理日志
+# 本地开发测试
+uvx --from . qcc proxy start              # 启动代理服务
+uvx --from . qcc proxy stop               # 停止代理服务
+uvx --from . qcc proxy status             # 查看代理状态
+uvx --from . qcc proxy logs               # 查看代理日志
+
+# 远程安装使用
+uvx qcc proxy start              # 启动代理服务
+uvx qcc proxy stop               # 停止代理服务
+uvx qcc proxy status             # 查看代理状态
+uvx qcc proxy logs               # 查看代理日志
 ```
 
 ---
@@ -75,16 +84,23 @@ qcc proxy logs               # 查看代理日志
 
 **CLI 命令:**
 ```bash
-qcc endpoint add <config-name>           # 添加 endpoint (交互式)
-qcc endpoint add <config-name> -f work   # 从 work 配置复用
-qcc endpoint list <config-name>          # 查看 endpoint 列表
-qcc endpoint remove <config-name> <id>   # 删除 endpoint
+# 本地开发测试
+uvx --from . qcc endpoint add <config-name>           # 添加 endpoint (交互式)
+uvx --from . qcc endpoint add <config-name> -f work   # 从 work 配置复用
+uvx --from . qcc endpoint list <config-name>          # 查看 endpoint 列表
+uvx --from . qcc endpoint remove <config-name> <id>   # 删除 endpoint
+
+# 远程安装使用
+uvx qcc endpoint add <config-name>           # 添加 endpoint (交互式)
+uvx qcc endpoint add <config-name> -f work   # 从 work 配置复用
+uvx qcc endpoint list <config-name>          # 查看 endpoint 列表
+uvx qcc endpoint remove <config-name> <id>   # 删除 endpoint
 ```
 
 **使用示例:**
 ```bash
 # 从现有配置快速复用
-qcc endpoint add production
+uvx qcc endpoint add production
 # 选择: 1 (从现有配置复用)
 # 选择配置: work
 # 权重: 100, 优先级: 1
@@ -118,28 +134,41 @@ Primary 恢复健康
 
 **CLI 命令:**
 ```bash
-qcc priority set production primary      # 设置为主配置
-qcc priority set backup secondary        # 设置为次配置
-qcc priority set emergency fallback      # 设置为兜底配置
-qcc priority list                        # 查看优先级配置
-qcc priority switch backup               # 手动切换配置
-qcc priority history                     # 查看切换历史
+# 本地开发测试
+uvx --from . qcc priority set production primary      # 设置为主配置
+uvx --from . qcc priority set backup secondary        # 设置为次配置
+uvx --from . qcc priority set emergency fallback      # 设置为兜底配置
+uvx --from . qcc priority list                        # 查看优先级配置
+uvx --from . qcc priority switch backup               # 手动切换配置
+uvx --from . qcc priority history                     # 查看切换历史
 
 # 配置故障转移策略
-qcc priority policy --auto-failover --auto-recovery \
+uvx --from . qcc priority policy --auto-failover --auto-recovery \
+  --failure-threshold 3 --cooldown 300
+
+# 远程安装使用
+uvx qcc priority set production primary      # 设置为主配置
+uvx qcc priority set backup secondary        # 设置为次配置
+uvx qcc priority set emergency fallback      # 设置为兜底配置
+uvx qcc priority list                        # 查看优先级配置
+uvx qcc priority switch backup               # 手动切换配置
+uvx qcc priority history                     # 查看切换历史
+
+# 配置故障转移策略
+uvx qcc priority policy --auto-failover --auto-recovery \
   --failure-threshold 3 --cooldown 300
 ```
 
 **使用示例:**
 ```bash
 # 配置三级故障转移
-qcc priority set production primary
-qcc priority set backup secondary
-qcc priority set emergency fallback
+uvx qcc priority set production primary
+uvx qcc priority set backup secondary
+uvx qcc priority set emergency fallback
 
-qcc priority policy --auto-failover --auto-recovery
+uvx qcc priority policy --auto-failover --auto-recovery
 
-qcc proxy start
+uvx qcc proxy start
 # ✓ 代理服务器已启动
 # ✓ 故障转移监控已启动
 
@@ -173,10 +202,17 @@ qcc proxy start
 
 **CLI 命令:**
 ```bash
-qcc health check                    # 立即执行健康检查
-qcc health status                   # 查看所有 endpoint 健康状态
-qcc health history <endpoint-id>    # 查看历史健康记录
-qcc health config                   # 配置健康检测参数
+# 本地开发测试
+uvx --from . qcc health check                    # 立即执行健康检查
+uvx --from . qcc health status                   # 查看所有 endpoint 健康状态
+uvx --from . qcc health history <endpoint-id>    # 查看历史健康记录
+uvx --from . qcc health config                   # 配置健康检测参数
+
+# 远程安装使用
+uvx qcc health check                    # 立即执行健康检查
+uvx qcc health status                   # 查看所有 endpoint 健康状态
+uvx qcc health history <endpoint-id>    # 查看历史健康记录
+uvx qcc health config                   # 配置健康检测参数
 ```
 
 ---
@@ -197,11 +233,19 @@ qcc health config                   # 配置健康检测参数
 
 **CLI 命令:**
 ```bash
-qcc queue status                     # 查看队列状态
-qcc queue list                       # 列出队列中的请求
-qcc queue retry <request-id>         # 手动重试某个请求
-qcc queue retry-all                  # 重试所有失败请求
-qcc queue clear                      # 清空队列
+# 本地开发测试
+uvx --from . qcc queue status                     # 查看队列状态
+uvx --from . qcc queue list                       # 列出队列中的请求
+uvx --from . qcc queue retry <request-id>         # 手动重试某个请求
+uvx --from . qcc queue retry-all                  # 重试所有失败请求
+uvx --from . qcc queue clear                      # 清空队列
+
+# 远程安装使用
+uvx qcc queue status                     # 查看队列状态
+uvx qcc queue list                       # 列出队列中的请求
+uvx qcc queue retry <request-id>         # 手动重试某个请求
+uvx qcc queue retry-all                  # 重试所有失败请求
+uvx qcc queue clear                      # 清空队列
 ```
 
 ---
@@ -217,12 +261,21 @@ qcc queue clear                      # 清空队列
 
 **CLI 命令:**
 ```bash
-qcc config get <key>                 # 获取配置项
-qcc config set <key> <value>         # 设置配置项
-qcc config list                      # 列出所有配置
-qcc config reset [key]               # 重置配置
-qcc config export <file>             # 导出配置
-qcc config import <file>             # 导入配置
+# 本地开发测试
+uvx --from . qcc config get <key>                 # 获取配置项
+uvx --from . qcc config set <key> <value>         # 设置配置项
+uvx --from . qcc config list                      # 列出所有配置
+uvx --from . qcc config reset [key]               # 重置配置
+uvx --from . qcc config export <file>             # 导出配置
+uvx --from . qcc config import <file>             # 导入配置
+
+# 远程安装使用
+uvx qcc config get <key>                 # 获取配置项
+uvx qcc config set <key> <value>         # 设置配置项
+uvx qcc config list                      # 列出所有配置
+uvx qcc config reset [key]               # 重置配置
+uvx qcc config export <file>             # 导出配置
+uvx qcc config import <file>             # 导入配置
 ```
 
 ---
@@ -339,32 +392,32 @@ fastcc/
 
 ```bash
 # 1. 初始化
-qcc init
+uvx qcc init
 
 # 2. 创建配置
-qcc add production --description "生产环境"
-qcc add backup --description "备用环境"
+uvx qcc add production --description "生产环境"
+uvx qcc add backup --description "备用环境"
 
 # 3. 为生产配置添加多个 endpoint (从现有配置复用)
-qcc endpoint add production -f work      # 从 work 配置复用
-qcc endpoint add production -f personal  # 从 personal 配置复用
+uvx qcc endpoint add production -f work      # 从 work 配置复用
+uvx qcc endpoint add production -f personal  # 从 personal 配置复用
 
 # 4. 设置优先级
-qcc priority set production primary
-qcc priority set backup secondary
+uvx qcc priority set production primary
+uvx qcc priority set backup secondary
 
 # 5. 配置故障转移策略
-qcc priority policy --auto-failover --auto-recovery
+uvx qcc priority policy --auto-failover --auto-recovery
 
 # 6. 启动代理服务
-qcc proxy start
+uvx qcc proxy start
 # ✓ 代理服务器已启动: http://127.0.0.1:7860
 # ✓ 故障转移监控已启动
 
 # 7. 查看状态
-qcc priority list
-qcc health status
-qcc queue status
+uvx qcc priority list
+uvx qcc health status
+uvx qcc queue status
 
 # 8. 配置 Claude Code 使用代理
 export ANTHROPIC_BASE_URL=http://127.0.0.1:7860

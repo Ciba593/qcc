@@ -97,7 +97,7 @@ class CloudFileBackend(StorageBackend):
             # 设置文件权限
             self.config_file.chmod(0o600)
             
-            print(f"✅ 配置已同步到云盘: {self.config_file}")
+            print(f"[OK] 配置已同步到云盘: {self.config_file}")
             return True
             
         except Exception as e:
@@ -115,7 +115,7 @@ class CloudFileBackend(StorageBackend):
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 
-            print(f"✅ 从云盘加载配置: {self.config_file}")
+            print(f"[OK] 从云盘加载配置: {self.config_file}")
             return data
             
         except json.JSONDecodeError as e:
@@ -131,7 +131,7 @@ class CloudFileBackend(StorageBackend):
         try:
             if self.config_file.exists():
                 self.config_file.unlink()
-                print(f"✅ 已删除云盘配置: {self.config_file}")
+                print(f"[OK] 已删除云盘配置: {self.config_file}")
             return True
             
         except Exception as e:

@@ -37,11 +37,11 @@ class GitHubSimpleBackend(StorageBackend):
                 pass
         
         # 首次使用，请求用户提供GitHub个人访问令牌
-        print("🔧 首次使用跨平台同步，需要GitHub个人访问令牌")
-        print("📋 获取步骤：")
+        print("[+] 首次使用跨平台同步，需要GitHub个人访问令牌")
+        print("[L] 获取步骤：")
         print("1. 访问: https://github.com/settings/tokens")
         print("2. 点击 'Generate new token (classic)'")
-        print("3. 选择权限: ✅ gist")
+        print("3. 选择权限: [OK] gist")
         print("4. 复制生成的令牌")
         print("")
         
@@ -50,7 +50,7 @@ class GitHubSimpleBackend(StorageBackend):
             self.access_token = token
             self._test_and_save_token()
         else:
-            print("❌ 无效的令牌格式")
+            print("[X] 无效的令牌格式")
             raise StorageError("GitHub令牌配置失败")
     
     def _test_and_save_token(self):
@@ -67,7 +67,7 @@ class GitHubSimpleBackend(StorageBackend):
             user_info = response.json()
             self.user_id = user_info['login']
             
-            print(f"✅ GitHub令牌验证成功，用户: {self.user_id}")
+            print(f"[OK] GitHub令牌验证成功，用户: {self.user_id}")
             
             # 保存配置
             config_dir = Path.home() / ".fastcc"
@@ -168,7 +168,7 @@ class GitHubSimpleBackend(StorageBackend):
                         json.dump(config, f, indent=2)
             
             response.raise_for_status()
-            print("✅ 配置已同步到GitHub (跨平台)")
+            print("[OK] 配置已同步到GitHub (跨平台)")
             return True
             
         except Exception as e:
@@ -194,7 +194,7 @@ class GitHubSimpleBackend(StorageBackend):
                 raise ConfigNotFoundError("Gist中未找到配置文件")
             
             content = gist['files'][self.GIST_FILENAME]['content']
-            print("✅ 从GitHub加载配置 (跨平台)")
+            print("[OK] 从GitHub加载配置 (跨平台)")
             return json.loads(content)
             
         except Exception as e:
@@ -210,7 +210,7 @@ class GitHubSimpleBackend(StorageBackend):
                 )
                 response.raise_for_status()
             
-            print("✅ 已删除GitHub配置")
+            print("[OK] 已删除GitHub配置")
             return True
             
         except Exception as e:

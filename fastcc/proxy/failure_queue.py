@@ -92,7 +92,7 @@ class FailureQueue:
             all_endpoints: 所有 endpoint 列表
         """
         self.running = True
-        logger.info("✓ 失败队列处理器已启动")
+        logger.info("[OK] 失败队列处理器已启动")
         logger.info("  - 检查间隔: 60秒")
         logger.info("  - 功能: 验证失败的 endpoint 是否已恢复")
 
@@ -104,7 +104,7 @@ class FailureQueue:
         except asyncio.CancelledError:
             logger.info("失败队列处理器收到停止信号")
         finally:
-            logger.info("✓ 失败队列处理器已停止")
+            logger.info("[OK] 失败队列处理器已停止")
 
     async def _verify_failed_endpoints(self, all_endpoints: List):
         """验证失败的 endpoint
@@ -153,14 +153,14 @@ class FailureQueue:
                 self.remove_endpoint(endpoint.id)
                 self.stats['total_recovered'] += 1
                 logger.info(
-                    f"✅ Endpoint {endpoint.id} 已恢复健康 "
+                    f"[OK] Endpoint {endpoint.id} 已恢复健康 "
                     f"({check.response_time_ms:.0f}ms)"
                 )
             else:
                 # 仍然失败
                 self.stats['total_still_failed'] += 1
                 logger.warning(
-                    f"❌ Endpoint {endpoint.id} 仍然不健康: {check.error_message}"
+                    f"[X] Endpoint {endpoint.id} 仍然不健康: {check.error_message}"
                 )
 
         # 持久化

@@ -63,7 +63,7 @@ class HealthMonitor:
 
         self.running = True
 
-        logger.info("✓ 智能健康监控已启动")
+        logger.info("[OK] 智能健康监控已启动")
         logger.info(f"  - 检查间隔: {self.check_interval}秒")
         logger.info(f"  - 检测方式: 对话测试")
         logger.info(
@@ -83,7 +83,7 @@ class HealthMonitor:
     async def stop(self):
         """停止健康监控"""
         self.running = False
-        logger.info("✓ 健康监控器已停止")
+        logger.info("[OK] 健康监控器已停止")
 
     async def perform_health_check(self, endpoints: List):
         """执行健康检查
@@ -230,12 +230,12 @@ class HealthMonitor:
         Args:
             results: ConversationalHealthCheck 列表
         """
-        logger.info(f"\n📊 健康检查完成:")
+        logger.info(f"\n[#] 健康检查完成:")
 
         for check in results:
             result_icon = {
-                HealthCheckResult.SUCCESS: '✅',
-                HealthCheckResult.FAILURE: '❌',
+                HealthCheckResult.SUCCESS: '[OK]',
+                HealthCheckResult.FAILURE: '[X]',
                 HealthCheckResult.TIMEOUT: '⏱️',
                 HealthCheckResult.RATE_LIMITED: '🚫',
                 HealthCheckResult.INVALID_KEY: '🔑'

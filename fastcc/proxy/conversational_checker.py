@@ -35,7 +35,8 @@ class ConversationalHealthChecker:
 
         self.timeout = 30  # 30 秒超时
         self.max_tokens = 10  # 只需要简短回复
-        self.model = "claude-3-haiku-20240307"  # 使用最快的模型
+        # 使用最快最便宜的 Claude 模型（根据 AnyRouter 测试，haiku 系列可用）
+        self.model = "claude-3-5-haiku-20241022"
 
     async def check_endpoint(self, endpoint) -> ConversationalHealthCheck:
         """检查单个 endpoint
@@ -134,10 +135,14 @@ class ConversationalHealthChecker:
         # 构建 API 请求
         url = f"{endpoint.base_url}/v1/messages"
 
+        # 同时发送两种认证方式，确保最大兼容性
         headers = {
             'Content-Type': 'application/json',
-            'X-API-Key': endpoint.api_key,
-            'anthropic-version': '2023-06-01'
+            # Anthropic 原生格式
+            'x-api-key': endpoint.api_key,
+            'anthropic-version': '2023-06-01',
+            # OpenAI 兼容格式
+            'Authorization': f'Bearer {endpoint.api_key}'
         }
 
         payload = {

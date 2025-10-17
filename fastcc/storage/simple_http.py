@@ -61,12 +61,12 @@ class SimpleHTTPBackend(StorageBackend):
             
             # 使用简单的文件存储服务（例如：file.io, 0x0.st等）
             # 这里使用一个模拟的实现，实际可以替换为真实的服务
-            print("✅ 配置已同步到云端 (HTTP存储)")
+            print("[OK] 配置已同步到云端 (HTTP存储)")
             self._save_local_config()
             return True
             
         except Exception as e:
-            print(f"⚠️  HTTP存储失败: {e}")
+            print(f"[!]  HTTP存储失败: {e}")
             return False
     
     def load_config(self) -> Optional[Dict[str, Any]]:
@@ -76,7 +76,7 @@ class SimpleHTTPBackend(StorageBackend):
         
         try:
             # 模拟从HTTP存储加载
-            print("✅ 从云端加载配置 (HTTP存储)")
+            print("[OK] 从云端加载配置 (HTTP存储)")
             return {}
             
         except Exception as e:
@@ -85,7 +85,7 @@ class SimpleHTTPBackend(StorageBackend):
     def delete_config(self) -> bool:
         """删除配置数据"""
         try:
-            print("✅ 已删除云端配置 (HTTP存储)")
+            print("[OK] 已删除云端配置 (HTTP存储)")
             self.user_hash = None
             self.storage_url = None
             self._save_local_config()

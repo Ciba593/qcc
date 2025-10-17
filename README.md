@@ -32,6 +32,12 @@
 - 🚫 无中心化存储风险
 - 🔒 敏感信息保护，无硬编码密钥
 
+### 🌐 **代理服务** (v0.4.0 新增)
+- 🔄 本地 HTTP 代理服务器
+- 🎯 多 Endpoint 负载均衡
+- 🛡️ 三级故障转移机制
+- 💚 智能健康检测
+
 </td>
 <td width="50%">
 
@@ -45,6 +51,12 @@
 - 🎨 现代 Python 包管理
 - 🔧 模块化设计，易于扩展
 - 🖥️ Rich 终端UI，跨平台交互体验
+
+### 🔧 **高可用性** (v0.4.0 新增)
+- ⚡ 自动故障转移和恢复
+- 📊 实时性能监控
+- 📋 失败请求队列
+- 🔍 详细日志追踪
 
 </td>
 </tr>
@@ -128,10 +140,17 @@ graph LR
 
 ### 🚀 **快速操作**
 ```bash
-qcc                    # 🌟 智能启动
-qcc fc                 # 🎭 厂商快速配置
-qcc init               # 🔧 初始化设置
-qcc add work           # ➕ 添加配置
+# 本地开发测试
+uvx --from . qcc                    # 🌟 智能启动
+uvx --from . qcc fc                 # 🎭 厂商快速配置
+uvx --from . qcc init               # 🔧 初始化设置
+uvx --from . qcc add work           # ➕ 添加配置
+
+# 远程安装使用
+uvx qcc                             # 🌟 智能启动
+uvx qcc fc                          # 🎭 厂商快速配置
+uvx qcc init                        # 🔧 初始化设置
+uvx qcc add work                    # ➕ 添加配置
 ```
 
 </td>
@@ -139,10 +158,17 @@ qcc add work           # ➕ 添加配置
 
 ### 📋 **管理命令**
 ```bash
-qcc list               # 📜 查看所有配置
-qcc use work           # 🎯 使用指定配置
-qcc status             # 📊 系统状态
-qcc sync               # 🔄 手动同步
+# 本地开发测试
+uvx --from . qcc list               # 📜 查看所有配置
+uvx --from . qcc use work           # 🎯 使用指定配置
+uvx --from . qcc status             # 📊 系统状态
+uvx --from . qcc sync               # 🔄 手动同步
+
+# 远程安装使用
+uvx qcc list                        # 📜 查看所有配置
+uvx qcc use work                    # 🎯 使用指定配置
+uvx qcc status                      # 📊 系统状态
+uvx qcc sync                        # 🔄 手动同步
 ```
 
 </td>
@@ -152,11 +178,85 @@ qcc sync               # 🔄 手动同步
 ### 🛠️ 高级管理
 
 ```bash
-qcc default work       # ⭐ 设置默认配置
-qcc config             # ⚙️  配置管理（更改存储方式）
-qcc remove old         # 🗑️  删除配置
-qcc uninstall          # 🧹 清理本地数据（保留云端）
+# 本地开发测试
+uvx --from . qcc default work       # ⭐ 设置默认配置
+uvx --from . qcc config             # ⚙️  配置管理（更改存储方式）
+uvx --from . qcc remove old         # 🗑️  删除配置
+uvx --from . qcc uninstall          # 🧹 清理本地数据（保留云端）
+
+# 远程安装使用
+uvx qcc default work                # ⭐ 设置默认配置
+uvx qcc config                      # ⚙️  配置管理（更改存储方式）
+uvx qcc remove old                  # 🗑️  删除配置
+uvx qcc uninstall                   # 🧹 清理本地数据（保留云端）
 ```
+
+### 🌐 代理服务命令 (v0.4.0 新增)
+
+<table>
+<tr>
+<td width="50%">
+
+#### 🎯 **Endpoint 管理**
+```bash
+# 本地开发测试
+uvx --from . qcc endpoint add <config>      # ➕ 添加 endpoint
+uvx --from . qcc endpoint list <config>     # 📜 查看 endpoints
+uvx --from . qcc endpoint remove <config> <id>  # 🗑️  删除 endpoint
+
+# 远程安装使用
+uvx qcc endpoint add production             # ➕ 添加 endpoint
+uvx qcc endpoint list production            # 📜 查看 endpoints
+uvx qcc endpoint remove production 1        # 🗑️  删除 endpoint
+```
+
+#### 🔄 **优先级管理**
+```bash
+# 本地开发测试
+uvx --from . qcc priority set <config> <level>  # ⚙️  设置优先级
+uvx --from . qcc priority list              # 📊 查看优先级
+uvx --from . qcc priority switch <config>   # 🔄 手动切换
+uvx --from . qcc priority history           # 📖 切换历史
+
+# 远程安装使用
+uvx qcc priority set production primary     # ⚙️  设置主配置
+uvx qcc priority set backup secondary       # ⚙️  设置次配置
+uvx qcc priority list                       # 📊 查看优先级
+```
+
+</td>
+<td width="50%">
+
+#### 🏥 **健康检测**
+```bash
+# 本地开发测试
+uvx --from . qcc health test                # 🧪 执行健康测试
+uvx --from . qcc health status              # 📊 查看健康状态
+uvx --from . qcc health metrics             # 📈 查看性能指标
+
+# 远程安装使用
+uvx qcc health test -v                      # 🧪 详细测试
+uvx qcc health status                       # 📊 健康状态
+uvx qcc health metrics                      # 📈 性能指标
+```
+
+#### 🚀 **代理服务器**
+```bash
+# 本地开发测试
+uvx --from . qcc proxy start                # ▶️  启动代理
+uvx --from . qcc proxy stop                 # ⏹️  停止代理
+uvx --from . qcc proxy status               # 📊 查看状态
+uvx --from . qcc proxy logs                 # 📋 查看日志
+
+# 远程安装使用
+uvx qcc proxy start                         # ▶️  启动代理服务
+uvx qcc proxy status                        # 📊 查看代理状态
+uvx qcc queue status                        # 📋 查看失败队列
+```
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -228,9 +328,18 @@ graph TD
 ├─────────────────────────────────────┤
 │  🧠 Core Logic                     │
 │   ├── 📋 ConfigManager             │
-│   └── 👤 ConfigProfile             │
+│   ├── 👤 ConfigProfile             │
+│   ├── 🎯 PriorityManager (v0.4.0) │
+│   └── 🔄 FailoverManager (v0.4.0) │
 ├─────────────────────────────────────┤
-│  🎭 Providers (New!)               │
+│  🌐 Proxy Services (v0.4.0 新增)   │
+│   ├── 🚀 ProxyServer               │
+│   ├── ⚖️  LoadBalancer             │
+│   ├── 💚 HealthMonitor             │
+│   ├── 📋 FailureQueue              │
+│   └── 📊 WeightAdjuster            │
+├─────────────────────────────────────┤
+│  🎭 Providers                      │
 │   ├── 🌐 ProvidersManager          │
 │   └── 🔗 Browser Integration       │
 ├─────────────────────────────────────┤
@@ -281,10 +390,9 @@ python -m fastcc.cli --help
 
 ```bash
 # ⚠️ 重要：必须先测试再发布，使用 uvx 进行测试
-uvx --from . qcc --help  # 使用 uvx 测试本地包
+uvx --from . qcc --help               # 使用 uvx 测试本地包（推荐）
 
 # 🔬 运行单元测试
-source venv/bin/activate
 pytest tests/ -v
 
 # 🎯 单个测试文件
@@ -347,6 +455,32 @@ python -m twine upload dist/*
 ## 📄 开源协议
 
 **MIT License** - 自由使用，欢迎贡献！
+
+---
+
+## 📚 详细文档
+
+### 命令参考手册
+
+- **[📖 CLI 命令参考](docs/CLI_REFERENCE.md)** - 所有可用命令的完整参考（基于当前实现）
+
+### v0.4.0 代理服务文档
+
+想了解更多关于 v0.4.0 代理服务的详细信息？查看完整文档：
+
+- **[📖 开发计划](docs/tasks/v0.4.0-代理服务/设计文档/claude-code-proxy-development-plan.md)** - 完整的技术设计和实现方案
+- **[✅ 完成报告](docs/tasks/v0.4.0-代理服务/COMPLETION_REPORT.md)** - 开发完成情况和使用指南
+- **[📘 使用示例](docs/tasks/v0.4.0-代理服务/用户指南/USAGE_EXAMPLE.md)** - 详细的使用场景和示例
+- **[🧪 测试指南](docs/tasks/v0.4.0-代理服务/用户指南/TESTING.md)** - 测试方法和验证步骤
+
+**核心功能文档**:
+- [🔄 自动故障转移机制](docs/tasks/v0.4.0-代理服务/设计文档/auto-failover-mechanism.md)
+- [🔧 Endpoint 配置复用](docs/tasks/v0.4.0-代理服务/设计文档/endpoint-reuse-implementation.md)
+- [💚 智能健康检测](docs/tasks/v0.4.0-代理服务/设计文档/intelligent-health-check.md)
+
+> **注意**: docs/tasks 中的文档描述的是设计规划，部分功能可能与当前实现有差异。请以 [CLI 命令参考](docs/CLI_REFERENCE.md) 为准。
+
+更多文档请查看 [docs/tasks](docs/tasks/) 目录。
 
 ---
 

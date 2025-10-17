@@ -147,20 +147,20 @@ qcc                    # 主命令
 
 ```bash
 # 初始化
-qcc init
+uvx qcc init
 
 # 添加配置
-qcc add production --description "生产环境"
-qcc add backup --description "备用环境"
-qcc add emergency --description "兜底环境"
+uvx qcc add production --description "生产环境"
+uvx qcc add backup --description "备用环境"
+uvx qcc add emergency --description "兜底环境"
 
 # 设置优先级
-qcc priority set production primary
-qcc priority set backup secondary
-qcc priority set emergency fallback
+uvx qcc priority set production primary
+uvx qcc priority set backup secondary
+uvx qcc priority set emergency fallback
 
 # 配置故障转移策略
-qcc priority policy \
+uvx qcc priority policy \
   --auto-failover \
   --auto-recovery \
   --failure-threshold 3 \
@@ -171,18 +171,18 @@ qcc priority policy \
 
 ```bash
 # 为生产配置添加多个 endpoint
-qcc endpoint add production -f work -w 100
-qcc endpoint add production -f personal -w 80
+uvx qcc endpoint add production -f work -w 100
+uvx qcc endpoint add production -f personal -w 80
 
 # 查看配置的所有 endpoints
-qcc endpoint list production
+uvx qcc endpoint list production
 ```
 
 ### 3. 启动代理服务
 
 ```bash
 # 启动代理（前台）
-qcc proxy start
+uvx qcc proxy start
 
 # 在另一个终端使用代理
 export ANTHROPIC_BASE_URL=http://127.0.0.1:7860
@@ -190,43 +190,43 @@ export ANTHROPIC_API_KEY=proxy-managed
 claude
 
 # 查看代理状态
-qcc proxy status
+uvx qcc proxy status
 
 # 查看日志
-qcc proxy logs -f
+uvx qcc proxy logs -f
 
 # 停止代理
-qcc proxy stop
+uvx qcc proxy stop
 ```
 
 ### 4. 监控和管理
 
 ```bash
 # 查看优先级配置
-qcc priority list
+uvx qcc priority list
 
 # 查看切换历史
-qcc priority history -n 20
+uvx qcc priority history -n 20
 
 # 手动切换配置
-qcc priority switch backup
+uvx qcc priority switch backup
 
 # 查看健康状态
-qcc health status
+uvx qcc health status
 
 # 执行健康测试
-qcc health test -v
+uvx qcc health test -v
 
 # 查看性能指标
-qcc health metrics
+uvx qcc health metrics
 
 # 查看失败队列
-qcc queue status
-qcc queue list
+uvx qcc queue status
+uvx qcc queue list
 
 # 重试失败请求
-qcc queue retry <request-id>
-qcc queue retry-all
+uvx qcc queue retry <request-id>
+uvx qcc queue retry-all
 ```
 
 ---
@@ -362,40 +362,40 @@ FALLBACK (兜底配置)
 **方案1: 单配置多Endpoint（推荐）**
 ```bash
 # 一个配置，多个API Key
-qcc add production
-qcc endpoint add production -f work
-qcc endpoint add production -f personal
-qcc endpoint add production -f backup
+uvx qcc add production
+uvx qcc endpoint add production -f work
+uvx qcc endpoint add production -f personal
+uvx qcc endpoint add production -f backup
 ```
 
 **方案2: 多配置优先级**
 ```bash
 # 三级配置，自动故障转移
-qcc add production    # PRIMARY
-qcc add backup        # SECONDARY
-qcc add emergency     # FALLBACK
-qcc priority set production primary
-qcc priority set backup secondary
-qcc priority set emergency fallback
+uvx qcc add production    # PRIMARY
+uvx qcc add backup        # SECONDARY
+uvx qcc add emergency     # FALLBACK
+uvx qcc priority set production primary
+uvx qcc priority set backup secondary
+uvx qcc priority set emergency fallback
 ```
 
 **方案3: 混合模式（最强大）**
 ```bash
 # 每个优先级配置都有多个endpoint
 # PRIMARY配置
-qcc add production
-qcc endpoint add production -f work1
-qcc endpoint add production -f work2
+uvx qcc add production
+uvx qcc endpoint add production -f work1
+uvx qcc endpoint add production -f work2
 
 # SECONDARY配置
-qcc add backup
-qcc endpoint add backup -f personal1
-qcc endpoint add backup -f personal2
+uvx qcc add backup
+uvx qcc endpoint add backup -f personal1
+uvx qcc endpoint add backup -f personal2
 
 # FALLBACK配置
-qcc add emergency
-qcc endpoint add emergency -f free1
-qcc endpoint add emergency -f free2
+uvx qcc add emergency
+uvx qcc endpoint add emergency -f free1
+uvx qcc endpoint add emergency -f free2
 ```
 
 ### 最佳实践

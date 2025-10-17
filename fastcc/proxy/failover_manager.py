@@ -56,7 +56,7 @@ class FailoverManager:
             return
 
         self.running = True
-        logger.info("✓ 故障转移监控已启动")
+        logger.info("[OK] 故障转移监控已启动")
 
         try:
             while self.running:
@@ -67,7 +67,7 @@ class FailoverManager:
         except Exception as e:
             logger.error(f"故障转移监控异常: {e}", exc_info=True)
         finally:
-            logger.info("✓ 故障转移管理器已停止")
+            logger.info("[OK] 故障转移管理器已停止")
 
     async def stop(self):
         """停止故障转移监控"""
@@ -169,17 +169,17 @@ class FailoverManager:
             logger.error("未配置 PriorityManager，无法执行故障转移")
             return False
 
-        logger.warning(f"🔄 触发故障转移: {from_profile}, 原因: {reason}")
+        logger.warning(f"[~] 触发故障转移: {from_profile}, 原因: {reason}")
 
         # 调用 PriorityManager 的故障转移逻辑
         success = self.priority_manager.trigger_failover(reason)
 
         if success:
             to_profile = self.priority_manager.get_active_profile()
-            logger.warning(f"🔄 故障转移完成: {from_profile} → {to_profile}")
-            print(f"\n🔄 故障转移: {from_profile} → {to_profile}")
+            logger.warning(f"[~] 故障转移完成: {from_profile} → {to_profile}")
+            print(f"\n[~] 故障转移: {from_profile} → {to_profile}")
             print(f"原因: {reason}")
-            print("✓ 故障转移完成\n")
+            print("[OK] 故障转移完成\n")
 
             # 记录失败的配置，用于自动恢复
             self.recovery_candidates[from_profile] = datetime.now()
@@ -235,15 +235,15 @@ class FailoverManager:
             is_healthy = await self._check_profile_health(primary_profile)
 
             if is_healthy:
-                logger.info(f"✓ 配置 {primary_profile} 已恢复健康，准备切回")
+                logger.info(f"[OK] 配置 {primary_profile} 已恢复健康，准备切回")
                 success = self.priority_manager.switch_to(
                     primary_profile,
                     reason="Auto recovery - primary profile recovered"
                 )
 
                 if success:
-                    logger.info(f"✓ 已自动恢复到主配置: {primary_profile}")
-                    print(f"\n✓ 自动恢复: {active_profile} → {primary_profile}")
+                    logger.info(f"[OK] 已自动恢复到主配置: {primary_profile}")
+                    print(f"\n[OK] 自动恢复: {active_profile} → {primary_profile}")
                     print("原因: 主配置已恢复健康\n")
 
                     # 从恢复候选中移除
@@ -266,15 +266,15 @@ class FailoverManager:
                 is_healthy = await self._check_profile_health(secondary_profile)
 
                 if is_healthy:
-                    logger.info(f"✓ 配置 {secondary_profile} 已恢复健康，准备切回")
+                    logger.info(f"[OK] 配置 {secondary_profile} 已恢复健康，准备切回")
                     success = self.priority_manager.switch_to(
                         secondary_profile,
                         reason="Auto recovery - secondary profile recovered"
                     )
 
                     if success:
-                        logger.info(f"✓ 已自动恢复到次配置: {secondary_profile}")
-                        print(f"\n✓ 自动恢复: {active_profile} → {secondary_profile}")
+                        logger.info(f"[OK] 已自动恢复到次配置: {secondary_profile}")
+                        print(f"\n[OK] 自动恢复: {active_profile} → {secondary_profile}")
                         print("原因: 次配置已恢复健康\n")
 
                         del self.recovery_candidates[secondary_profile]
