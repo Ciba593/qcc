@@ -112,7 +112,7 @@ class HealthMonitor:
             self._update_metrics(check)
 
             # 更新 endpoint 健康状态
-            self._update_endpoint_health(check, enabled_endpoints)
+            await self._update_endpoint_health(check, enabled_endpoints)
 
         # 调整权重
         if self.enable_weight_adjustment:
@@ -139,7 +139,7 @@ class HealthMonitor:
         metrics = self.performance_metrics[endpoint_id]
         metrics.add_check_result(check)
 
-    def _update_endpoint_health(self, check, endpoints: List):
+    async def _update_endpoint_health(self, check, endpoints: List):
         """根据检查结果更新 endpoint 健康状态
 
         Args:
