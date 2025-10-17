@@ -157,19 +157,30 @@ class HealthMonitor:
             return
 
         # 根据检查结果更新健康状态
-        if check.result == HealthCheckResult.SUCCESS:
+        # 判断真正健康：需要同时满足 result=SUCCESS 和 response_valid=True
+        if check.result == HealthCheckResult.SUCCESS and check.response_valid:
             # 成功：设置为健康状态
-            endpoint.update_health_status(
+            await endpoint.update_health_status(
                 status='healthy',
                 increment_requests=True,
                 is_failure=False,
                 response_time=check.response_time_ms
             )
-            logger.debug(f"Endpoint {endpoint.id} 恢复健康")
+            logger.debug(f"Endpoint {endpoint.id} 健康")
+        elif check.result == HealthCheckResult.SUCCESS and not check.response_valid:
+            # HTTP 200 但响应无效（例如：没有返回验证码）
+            await endpoint.update_health_status(
+                status='unhealthy',
+                increment_requests=True,
+                is_failure=True
+            )
+            logger.warning(
+                f"Endpoint {endpoint.id} 响应无效（未包含验证码）"
+            )
 
         elif check.result in [HealthCheckResult.TIMEOUT, HealthCheckResult.FAILURE]:
             # 超时或失败：设置为不健康状态
-            endpoint.update_health_status(
+            await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
                 is_failure=True
@@ -181,7 +192,7 @@ class HealthMonitor:
 
         elif check.result == HealthCheckResult.RATE_LIMITED:
             # 限流：设置为降级状态
-            endpoint.update_health_status(
+            await endpoint.update_health_status(
                 status='degraded',
                 increment_requests=True,
                 is_failure=False
@@ -190,7 +201,7 @@ class HealthMonitor:
 
         elif check.result == HealthCheckResult.INVALID_KEY:
             # API Key 无效：禁用 endpoint
-            endpoint.update_health_status(
+            await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
                 is_failure=True
@@ -243,12 +254,19 @@ class HealthMonitor:
 
             metrics = self.performance_metrics.get(check.endpoint_id)
 
-            if check.result == HealthCheckResult.SUCCESS:
+            # 检查是否真正成功（result=SUCCESS 且 response_valid=True）
+            if check.result == HealthCheckResult.SUCCESS and check.response_valid:
                 weight_info = f"权重: {self._get_endpoint_weight(check.endpoint_id)}" if metrics else ""
                 logger.info(
                     f"  {result_icon} {check.endpoint_id}: "
                     f"{check.response_time_ms:.0f}ms "
                     f"(评分: {check.response_score:.0f}/100, {weight_info})"
+                )
+            elif check.result == HealthCheckResult.SUCCESS and not check.response_valid:
+                # HTTP 200 但响应无效
+                logger.info(
+                    f"  [X] {check.endpoint_id}: "
+                    f"响应无效（未包含验证码）"
                 )
             else:
                 logger.info(

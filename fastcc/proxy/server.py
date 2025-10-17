@@ -392,7 +392,7 @@ class ProxyServer:
                     response_time = (datetime.now() - start_time).total_seconds() * 1000
 
                     # 更新 endpoint 健康状态
-                    endpoint.update_health_status(
+                    await endpoint.update_health_status(
                         status='healthy',
                         increment_requests=True,
                         is_failure=False,
@@ -416,7 +416,7 @@ class ProxyServer:
                     is_success = response.status == 200
 
                     # 更新 endpoint 健康状态
-                    endpoint.update_health_status(
+                    await endpoint.update_health_status(
                         status='healthy' if is_success else 'unhealthy',
                         increment_requests=True,
                         is_failure=not is_success,
@@ -451,7 +451,7 @@ class ProxyServer:
 
         except asyncio.TimeoutError:
             logger.error(f"[{request_id}] 请求超时")
-            endpoint.update_health_status(
+            await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
                 is_failure=True
@@ -467,7 +467,7 @@ class ProxyServer:
 
         except Exception as e:
             logger.error(f"[{request_id}] 转发请求失败: {e}")
-            endpoint.update_health_status(
+            await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
                 is_failure=True

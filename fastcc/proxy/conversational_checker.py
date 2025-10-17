@@ -24,17 +24,8 @@ class ConversationalHealthChecker:
 
     def __init__(self):
         """初始化健康检查器"""
-        # 测试消息列表（随机选择以避免缓存）
-        self.test_messages = [
-            "收到消息请回复 1",
-            "你好，请回复确认",
-            "测试消息，请回答：1+1=?",
-            "健康检查：请回复 OK",
-            "ping test, reply with pong"
-        ]
-
         self.timeout = 30  # 30 秒超时
-        self.max_tokens = 10  # 只需要简短回复
+        self.max_tokens = 20  # 确保有足够空间返回验证码
         # 使用最快最便宜的 Claude 模型（根据 AnyRouter 测试，haiku 系列可用）
         self.model = "claude-3-5-haiku-20241022"
 
@@ -49,8 +40,12 @@ class ConversationalHealthChecker:
         """
         check = ConversationalHealthCheck(endpoint.id)
 
-        # 随机选择一个测试消息（避免缓存）
-        check.test_message = random.choice(self.test_messages)
+        # 生成随机验证码（6位字母数字组合）
+        verification_code = ''.join(
+            random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6)
+        )
+        check.test_message = f"收到消息请仅回复这个验证码：{verification_code}"
+        check.verification_code = verification_code  # 保存用于验证
 
         try:
             start_time = time.time()
@@ -71,9 +66,9 @@ class ConversationalHealthChecker:
                 check.tokens_used = response.get('usage', {}).get('total_tokens', 0)
                 check.model_used = response.get('model', '')
 
-                # 验证响应质量
+                # 验证响应质量（检查是否包含验证码）
                 check.response_valid = self._validate_response(
-                    check.test_message,
+                    check.verification_code,
                     check.response_content
                 )
                 check.response_score = self._calculate_response_score(
@@ -135,14 +130,17 @@ class ConversationalHealthChecker:
         # 构建 API 请求
         url = f"{endpoint.base_url}/v1/messages"
 
-        # 同时发送两种认证方式，确保最大兼容性
+        # 同时支持两种认证方式以确保最大兼容性
         headers = {
             'Content-Type': 'application/json',
             # Anthropic 原生格式
             'x-api-key': endpoint.api_key,
-            'anthropic-version': '2023-06-01',
             # OpenAI 兼容格式
-            'Authorization': f'Bearer {endpoint.api_key}'
+            'Authorization': f'Bearer {endpoint.api_key}',
+            'anthropic-version': '2023-06-01',
+            # Claude Code CLI 识别（从官方 CLI 源码提取）
+            'User-Agent': 'claude-code/2.0.21',
+            'x-app': 'cli'
         }
 
         payload = {
@@ -165,8 +163,22 @@ class ConversationalHealthChecker:
             ) as response:
                 if response.status == 200:
                     data = await response.json()
+
+                    # 提取响应内容
+                    # 支持标准 Anthropic 格式和其他可能的格式
+                    content = ''
+                    if 'content' in data and data['content']:
+                        # 标准 Anthropic 格式
+                        content = data['content'][0].get('text', '')
+                    elif 'message' in data:
+                        # 某些代理可能使用 message 字段
+                        content = data['message']
+                    elif 'text' in data:
+                        # 简化格式
+                        content = data['text']
+
                     return {
-                        'content': data.get('content', [{}])[0].get('text', ''),
+                        'content': content,
                         'usage': data.get('usage', {}),
                         'model': data.get('model', '')
                     }
@@ -180,40 +192,21 @@ class ConversationalHealthChecker:
                         f"HTTP {response.status}: {error_text}"
                     )
 
-    def _validate_response(self, test_message: str, response: str) -> bool:
-        """验证响应是否合理
+    def _validate_response(self, verification_code: str, response: str) -> bool:
+        """验证响应是否包含验证码
 
         Args:
-            test_message: 测试消息
-            response: AI 响应
+            verification_code: 发送给 AI 的验证码
+            response: AI 响应内容
 
         Returns:
-            True 如果响应有效，False 否则
+            True 如果响应包含验证码，False 否则
         """
-        if not response:
+        if not response or not verification_code:
             return False
 
-        # 简单验证：响应不为空且长度合理
-        response_lower = response.lower().strip()
-
-        # 对于 "收到消息请回复 1"，检查是否包含 "1"
-        if "回复 1" in test_message or "回答：1" in test_message:
-            return (
-                '1' in response_lower or
-                'one' in response_lower or
-                'ok' in response_lower
-            )
-
-        # 对于 "1+1=?" 问题
-        if "1+1" in test_message:
-            return '2' in response_lower or 'two' in response_lower
-
-        # 对于 "ping/pong" 测试
-        if "ping" in test_message.lower():
-            return 'pong' in response_lower
-
-        # 通用验证：有响应就认为是有效的
-        return len(response) > 0 and len(response) < 200
+        # 检查响应中是否包含验证码（不区分大小写）
+        return verification_code.upper() in response.upper()
 
     def _calculate_response_score(
         self,

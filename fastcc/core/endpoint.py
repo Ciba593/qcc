@@ -1,6 +1,7 @@
 """Endpoint 配置模型"""
 
-import uuid
+import asyncio
+import hashlib
 from datetime import datetime
 from typing import Optional, Dict, Any, TYPE_CHECKING
 
@@ -13,6 +14,8 @@ class Endpoint:
 
     代表一个 API endpoint，包含 URL、API Key、权重、优先级等配置信息。
     支持从现有 ConfigProfile 创建，记录来源配置以便追溯。
+
+    注意：endpoint 的唯一性由 (base_url, api_key) 决定，ID 基于这两者的哈希值生成。
     """
 
     def __init__(
@@ -40,7 +43,8 @@ class Endpoint:
             source_profile: 来源配置名称（用于追溯从哪个配置复用）
             metadata: 额外的元数据信息
         """
-        self.id = str(uuid.uuid4())[:8]  # 短 ID，便于识别
+        # 基于 base_url + api_key 生成稳定的 ID（确保相同的配置得到相同的 ID）
+        self.id = self._generate_stable_id(base_url, api_key)
         self.base_url = base_url
         self.api_key = api_key
         self.weight = weight
@@ -62,6 +66,26 @@ class Endpoint:
             'success_rate': 100.0,
             'avg_response_time': 0
         }
+
+        # 异步锁：写操作加锁，读操作不加锁
+        # 用于保护 health_status 和 enabled 字段的并发修改
+        self._lock = asyncio.Lock()
+
+    @staticmethod
+    def _generate_stable_id(base_url: str, api_key: str) -> str:
+        """基于 base_url 和 api_key 生成稳定的唯一 ID
+
+        Args:
+            base_url: API 基础 URL
+            api_key: API Key
+
+        Returns:
+            8 字符的稳定 ID
+        """
+        # 使用 SHA256 哈希确保唯一性和稳定性
+        content = f"{base_url}|{api_key}".encode('utf-8')
+        hash_value = hashlib.sha256(content).hexdigest()
+        return hash_value[:8]  # 取前 8 个字符作为短 ID
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（用于序列化）
@@ -181,14 +205,14 @@ class Endpoint:
 
         return " | ".join(info)
 
-    def update_health_status(
+    async def update_health_status(
         self,
         status: Optional[str] = None,
         increment_requests: bool = False,
         is_failure: bool = False,
         response_time: Optional[float] = None
     ):
-        """更新健康状态
+        """更新健康状态（异步方法，使用写锁保护）
 
         Args:
             status: 新的健康状态 ('healthy', 'degraded', 'unhealthy')
@@ -196,39 +220,40 @@ class Endpoint:
             is_failure: 是否为失败请求
             response_time: 响应时间（毫秒）
         """
-        if status:
-            self.health_status['status'] = status
+        async with self._lock:
+            if status:
+                self.health_status['status'] = status
 
-        self.health_status['last_check'] = datetime.now().isoformat()
+            self.health_status['last_check'] = datetime.now().isoformat()
 
-        if increment_requests:
-            self.health_status['total_requests'] += 1
+            if increment_requests:
+                self.health_status['total_requests'] += 1
 
-            if is_failure:
-                self.health_status['failed_requests'] += 1
-                self.health_status['consecutive_failures'] += 1
-            else:
-                self.health_status['consecutive_failures'] = 0
+                if is_failure:
+                    self.health_status['failed_requests'] += 1
+                    self.health_status['consecutive_failures'] += 1
+                else:
+                    self.health_status['consecutive_failures'] = 0
 
-            # 更新成功率
-            if self.health_status['total_requests'] > 0:
-                success_count = (self.health_status['total_requests'] -
-                               self.health_status['failed_requests'])
-                self.health_status['success_rate'] = (
-                    success_count / self.health_status['total_requests'] * 100
-                )
+                # 更新成功率
+                if self.health_status['total_requests'] > 0:
+                    success_count = (self.health_status['total_requests'] -
+                                   self.health_status['failed_requests'])
+                    self.health_status['success_rate'] = (
+                        success_count / self.health_status['total_requests'] * 100
+                    )
 
-        if response_time is not None:
-            # 使用简单移动平均更新响应时间
-            current_avg = self.health_status['avg_response_time']
-            total = self.health_status['total_requests']
+            if response_time is not None:
+                # 使用简单移动平均更新响应时间
+                current_avg = self.health_status['avg_response_time']
+                total = self.health_status['total_requests']
 
-            if total > 0:
-                self.health_status['avg_response_time'] = (
-                    (current_avg * (total - 1) + response_time) / total
-                )
-            else:
-                self.health_status['avg_response_time'] = response_time
+                if total > 0:
+                    self.health_status['avg_response_time'] = (
+                        (current_avg * (total - 1) + response_time) / total
+                    )
+                else:
+                    self.health_status['avg_response_time'] = response_time
 
     def is_healthy(self) -> bool:
         """检查 endpoint 是否健康
@@ -236,11 +261,20 @@ class Endpoint:
         Returns:
             True 如果健康，False 否则
         """
-        return (
-            self.enabled and
-            self.health_status['status'] in ['healthy', 'unknown'] and
-            self.health_status['consecutive_failures'] < self.max_failures
-        )
+        # 如果被禁用，立即返回 False
+        if not self.enabled:
+            return False
+
+        # 如果状态明确标记为 unhealthy，立即返回 False
+        if self.health_status['status'] == 'unhealthy':
+            return False
+
+        # 如果连续失败次数达到阈值，返回 False
+        if self.health_status['consecutive_failures'] >= self.max_failures:
+            return False
+
+        # 只有 healthy 或 unknown 状态才认为是健康的
+        return self.health_status['status'] in ['healthy', 'unknown']
 
     def __repr__(self) -> str:
         """字符串表示"""

@@ -33,8 +33,9 @@ class ConversationalHealthCheck:
         self.check_id = str(uuid.uuid4())[:8]
         self.timestamp = datetime.now().isoformat()
 
-        # 测试消息
+        # 测试消息和验证码
         self.test_message = "收到消息请回复 1"
+        self.verification_code: Optional[str] = None  # 随机验证码
 
         # 检测结果
         self.result: Optional[HealthCheckResult] = None

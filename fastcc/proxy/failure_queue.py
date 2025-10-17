@@ -152,9 +152,10 @@ class FailureQueue:
             # 导入 HealthCheckResult
             from .health_check_models import HealthCheckResult
 
-            if check.result == HealthCheckResult.SUCCESS:
+            # 判断是否真正恢复：需要同时满足 result=SUCCESS 和 response_valid=True
+            if check.result == HealthCheckResult.SUCCESS and check.response_valid:
                 # 恢复健康
-                endpoint.update_health_status(
+                await endpoint.update_health_status(
                     status='healthy',
                     increment_requests=False,
                     is_failure=False,
@@ -163,14 +164,15 @@ class FailureQueue:
                 await self.remove_endpoint(endpoint.id)
                 self.stats['total_recovered'] += 1
                 logger.info(
-                    f"[OK] Endpoint {endpoint.id} 已恢复健康 "
-                    f"({check.response_time_ms:.0f}ms)"
+                    f"✅ Endpoint {endpoint.id} 已恢复健康 "
+                    f"({check.response_time_ms:.0f}ms, 评分: {check.response_score:.0f})"
                 )
             else:
                 # 仍然失败
                 self.stats['total_still_failed'] += 1
+                reason = check.error_message or "响应无效（未包含验证码）"
                 logger.warning(
-                    f"[X] Endpoint {endpoint.id} 仍然不健康: {check.error_message}"
+                    f"❌ Endpoint {endpoint.id} 仍然不健康: {reason}"
                 )
 
         # 持久化
