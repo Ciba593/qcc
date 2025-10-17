@@ -659,3 +659,31 @@ class ConfigManager:
             self.sync_to_cloud()
 
         return True
+
+    def save_profiles(self) -> bool:
+        """保存所有配置档案
+
+        Returns:
+            是否成功
+        """
+        try:
+            # 保存到本地和云端
+            self._save_local_cache()
+            if self.settings['auto_sync']:
+                self.sync_to_cloud()
+
+            return True
+        except Exception as e:
+            print(f"❌ 保存配置失败: {e}")
+            return False
+
+    def has_profile(self, name: str) -> bool:
+        """检查配置是否存在
+
+        Args:
+            name: 配置名称
+
+        Returns:
+            是否存在
+        """
+        return name in self.profiles

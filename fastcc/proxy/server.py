@@ -3,9 +3,11 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Optional, Dict, Any
 from aiohttp import web, ClientSession, ClientTimeout
 from datetime import datetime
+from pathlib import Path
 import signal
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,12 @@ class ProxyServer:
         host: str = '127.0.0.1',
         port: int = 7860,
         config_manager=None,
-        load_balancer=None
+        load_balancer=None,
+        priority_manager=None,
+        failover_manager=None,
+        health_monitor=None,
+        failure_queue=None,
+        cluster_name: str = None
     ):
         """初始化代理服务器
 
@@ -32,17 +39,36 @@ class ProxyServer:
             port: 监听端口 (默认 7860)
             config_manager: 配置管理器实例
             load_balancer: 负载均衡器实例
+            priority_manager: 优先级管理器实例
+            failover_manager: 故障转移管理器实例
+            health_monitor: 健康监控器实例
+            failure_queue: 失败队列实例
+            cluster_name: 集群配置名称（可选）
         """
         self.host = host
         self.port = port
         self.config_manager = config_manager
         self.load_balancer = load_balancer
+        self.priority_manager = priority_manager
+        self.failover_manager = failover_manager
+        self.health_monitor = health_monitor
+        self.failure_queue = failure_queue
+        self.cluster_name = cluster_name
 
         self.app = web.Application()
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
         self.client_session: Optional[ClientSession] = None
         self.running = False
+
+        # 后台任务
+        self._health_monitor_task: Optional[asyncio.Task] = None
+        self._failover_manager_task: Optional[asyncio.Task] = None
+        self._failure_queue_task: Optional[asyncio.Task] = None
+
+        # PID 文件路径
+        self.pid_file = Path.home() / '.qcc' / 'proxy.pid'
+        self.log_file = Path.home() / '.qcc' / 'proxy.log'
 
         # 统计信息
         self.stats = {
@@ -101,14 +127,15 @@ class ProxyServer:
 
             logger.info(f"[{request_id}] 选中 endpoint: {endpoint.id} ({endpoint.base_url})")
 
-            # 3. 转发请求
+            # 3. 转发请求 - 传递原始 request 对象以支持流式响应
             response = await self._forward_request(
                 endpoint=endpoint,
                 method=request.method,
                 path=request.path,
                 headers=dict(request.headers),
                 body=body,
-                request_id=request_id
+                request_id=request_id,
+                original_request=request  # 添加原始请求对象
             )
 
             if response:
@@ -163,8 +190,28 @@ class ProxyServer:
         if not self.config_manager:
             return endpoints
 
-        # 获取默认配置或主配置
-        profile = self.config_manager.get_default_profile()
+        # 如果指定了集群配置，使用该配置的 endpoints
+        if self.cluster_name:
+            profile = self.config_manager.get_profile(self.cluster_name)
+            if profile and hasattr(profile, 'endpoints') and profile.endpoints:
+                # 只返回启用且健康的 endpoint
+                endpoints = [
+                    ep for ep in profile.endpoints
+                    if ep.enabled and ep.is_healthy()
+                ]
+                return endpoints
+
+        # 否则，优先使用 priority_manager 获取活跃配置
+        profile_name = None
+        if self.priority_manager:
+            profile_name = self.priority_manager.get_active_profile()
+
+        # 如果没有优先级配置，使用默认配置
+        if not profile_name:
+            profile = self.config_manager.get_default_profile()
+        else:
+            profile = self.config_manager.get_profile(profile_name)
+
         if not profile:
             return endpoints
 
@@ -178,6 +225,44 @@ class ProxyServer:
 
         return endpoints
 
+    def _get_all_endpoints(self):
+        """获取所有 endpoint（包括不健康的）
+
+        Returns:
+            所有 endpoint 列表
+        """
+        endpoints = []
+        if not self.config_manager:
+            return endpoints
+
+        # 如果指定了集群配置，使用该配置的 endpoints
+        if self.cluster_name:
+            profile = self.config_manager.get_profile(self.cluster_name)
+            if profile and hasattr(profile, 'endpoints') and profile.endpoints:
+                # 返回所有 endpoint（不过滤健康状态）
+                return list(profile.endpoints)
+
+        # 否则，优先使用 priority_manager 获取活跃配置
+        profile_name = None
+        if self.priority_manager:
+            profile_name = self.priority_manager.get_active_profile()
+
+        # 如果没有优先级配置，使用默认配置
+        if not profile_name:
+            profile = self.config_manager.get_default_profile()
+        else:
+            profile = self.config_manager.get_profile(profile_name)
+
+        if not profile:
+            return endpoints
+
+        # 获取配置的 endpoints
+        if hasattr(profile, 'endpoints') and profile.endpoints:
+            # 返回所有 endpoint（不过滤健康状态）
+            endpoints = list(profile.endpoints)
+
+        return endpoints
+
     async def _forward_request(
         self,
         endpoint,
@@ -185,7 +270,8 @@ class ProxyServer:
         path: str,
         headers: Dict[str, str],
         body: bytes,
-        request_id: str
+        request_id: str,
+        original_request: web.Request = None
     ) -> Optional[web.Response]:
         """转发请求到目标 endpoint
 
@@ -196,13 +282,14 @@ class ProxyServer:
             headers: 请求头
             body: 请求体
             request_id: 请求 ID
+            original_request: 原始 Request 对象（用于流式响应）
 
         Returns:
             代理响应，失败返回 None
         """
         if not self.client_session:
             self.client_session = ClientSession(
-                timeout=ClientTimeout(total=endpoint.timeout)
+                timeout=ClientTimeout(total=300)  # 增加默认超时到 5 分钟
             )
 
         try:
@@ -226,35 +313,74 @@ class ProxyServer:
                 url=target_url,
                 headers=forward_headers,
                 data=body,
-                timeout=ClientTimeout(total=endpoint.timeout)
+                timeout=ClientTimeout(total=300, sock_read=60)  # 总超时 5 分钟，读取超时 1 分钟
             ) as response:
-                # 读取响应
-                response_body = await response.read()
-
-                # 计算响应时间
-                response_time = (datetime.now() - start_time).total_seconds() * 1000
-
-                # 更新 endpoint 健康状态
-                endpoint.update_health_status(
-                    status='healthy',
-                    increment_requests=True,
-                    is_failure=False,
-                    response_time=response_time
+                # 检查是否为流式响应
+                is_streaming = (
+                    response.headers.get('Content-Type', '').startswith('text/event-stream') or
+                    response.headers.get('Transfer-Encoding') == 'chunked' or
+                    'stream' in response.headers.get('Content-Type', '').lower()
                 )
 
-                logger.debug(
-                    f"[{request_id}] 响应: {response.status}, "
-                    f"耗时: {response_time:.2f}ms"
-                )
+                if is_streaming and original_request:
+                    # 流式响应：创建 StreamResponse 并逐块转发
+                    proxy_response = web.StreamResponse(
+                        status=response.status,
+                        headers=dict(response.headers)
+                    )
+                    await proxy_response.prepare(original_request)
 
-                # 构建代理响应
-                proxy_response = web.Response(
-                    status=response.status,
-                    body=response_body,
-                    headers=dict(response.headers)
-                )
+                    # 逐块读取并转发
+                    async for chunk in response.content.iter_chunked(8192):
+                        await proxy_response.write(chunk)
 
-                return proxy_response
+                    await proxy_response.write_eof()
+
+                    # 计算响应时间
+                    response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+                    # 更新 endpoint 健康状态
+                    endpoint.update_health_status(
+                        status='healthy',
+                        increment_requests=True,
+                        is_failure=False,
+                        response_time=response_time
+                    )
+
+                    logger.debug(
+                        f"[{request_id}] 流式响应完成: {response.status}, "
+                        f"耗时: {response_time:.2f}ms"
+                    )
+
+                    return proxy_response
+                else:
+                    # 非流式响应：一次性读取
+                    response_body = await response.read()
+
+                    # 计算响应时间
+                    response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+                    # 更新 endpoint 健康状态
+                    endpoint.update_health_status(
+                        status='healthy',
+                        increment_requests=True,
+                        is_failure=False,
+                        response_time=response_time
+                    )
+
+                    logger.debug(
+                        f"[{request_id}] 响应: {response.status}, "
+                        f"耗时: {response_time:.2f}ms"
+                    )
+
+                    # 构建代理响应
+                    proxy_response = web.Response(
+                        status=response.status,
+                        body=response_body,
+                        headers=dict(response.headers)
+                    )
+
+                    return proxy_response
 
         except asyncio.TimeoutError:
             logger.error(f"[{request_id}] 请求超时")
@@ -263,6 +389,13 @@ class ProxyServer:
                 increment_requests=True,
                 is_failure=True
             )
+            # 将失败请求加入队列
+            if self.failure_queue:
+                # 将失败的 endpoint 加入验证队列
+                self.failure_queue.add_failed_endpoint(
+                    endpoint.id,
+                    f"Timeout after {endpoint.timeout}s"
+                )
             return None
 
         except Exception as e:
@@ -272,6 +405,13 @@ class ProxyServer:
                 increment_requests=True,
                 is_failure=True
             )
+            # 将失败请求加入队列
+            if self.failure_queue:
+                # 将失败的 endpoint 加入验证队列
+                self.failure_queue.add_failed_endpoint(
+                    endpoint.id,
+                    str(e)
+                )
             return None
 
     async def start(self):
@@ -282,6 +422,9 @@ class ProxyServer:
 
         try:
             logger.info(f"正在启动代理服务器 {self.host}:{self.port}...")
+
+            # 保存 PID 到文件
+            self._write_pid()
 
             self.runner = web.AppRunner(self.app)
             await self.runner.setup()
@@ -295,6 +438,36 @@ class ProxyServer:
             logger.info(f"✓ 代理服务器已启动: http://{self.host}:{self.port}")
             print(f"✓ 代理服务器已启动: http://{self.host}:{self.port}")
 
+            # 注释掉主动健康监控器（改为被动检测）
+            # if self.health_monitor:
+            #     endpoints = self._get_active_endpoints()
+            #     if endpoints:
+            #         self._health_monitor_task = asyncio.create_task(
+            #             self.health_monitor.start(endpoints)
+            #         )
+            #         logger.info("✓ 健康监控器已启动")
+            #         print("✓ 健康监控器已启动")
+
+            # 启动故障转移管理器（后台任务）
+            if self.failover_manager:
+                policy = self.priority_manager.get_policy() if self.priority_manager else {}
+                if policy.get('auto_failover'):
+                    self._failover_manager_task = asyncio.create_task(
+                        self.failover_manager.start()
+                    )
+                    logger.info("✓ 故障转移监控已启动")
+                    print("✓ 故障转移监控已启动")
+
+            # 启动失败队列处理器（后台任务）
+            if self.failure_queue:
+                # 获取所有 endpoints 用于验证
+                all_endpoints = self._get_all_endpoints()
+                self._failure_queue_task = asyncio.create_task(
+                    self.failure_queue.process_queue(all_endpoints)
+                )
+                logger.info("✓ 失败队列处理器已启动")
+                print("✓ 失败队列处理器已启动")
+
             # 保持运行
             try:
                 await asyncio.Event().wait()
@@ -303,7 +476,11 @@ class ProxyServer:
 
         except Exception as e:
             logger.error(f"启动代理服务器失败: {e}", exc_info=True)
+            self._remove_pid()
             raise
+        finally:
+            # 确保 PID 文件被清理
+            await self.stop()
 
     async def stop(self):
         """停止代理服务器"""
@@ -314,6 +491,42 @@ class ProxyServer:
         print("\n正在停止代理服务器...")
 
         self.running = False
+
+        # 停止失败队列处理器
+        if self.failure_queue and self._failure_queue_task:
+            await self.failure_queue.stop()
+            if not self._failure_queue_task.done():
+                self._failure_queue_task.cancel()
+                try:
+                    await self._failure_queue_task
+                except asyncio.CancelledError:
+                    pass
+            self._failure_queue_task = None
+            logger.info("✓ 失败队列处理器已停止")
+
+        # 停止故障转移管理器
+        if self.failover_manager and self._failover_manager_task:
+            await self.failover_manager.stop()
+            if not self._failover_manager_task.done():
+                self._failover_manager_task.cancel()
+                try:
+                    await self._failover_manager_task
+                except asyncio.CancelledError:
+                    pass
+            self._failover_manager_task = None
+            logger.info("✓ 故障转移管理器已停止")
+
+        # 停止健康监控器
+        if self.health_monitor and self._health_monitor_task:
+            await self.health_monitor.stop()
+            if not self._health_monitor_task.done():
+                self._health_monitor_task.cancel()
+                try:
+                    await self._health_monitor_task
+                except asyncio.CancelledError:
+                    pass
+            self._health_monitor_task = None
+            logger.info("✓ 健康监控器已停止")
 
         # 关闭客户端会话
         if self.client_session:
@@ -329,6 +542,9 @@ class ProxyServer:
             await self.runner.cleanup()
             self.runner = None
 
+        # 删除 PID 文件
+        self._remove_pid()
+
         logger.info("✓ 代理服务器已停止")
         print("✓ 代理服务器已停止")
 
@@ -341,6 +557,87 @@ class ProxyServer:
             stats['uptime'] = (datetime.now() - start).total_seconds()
 
         return stats
+
+    def _write_pid(self):
+        """写入 PID 文件"""
+        try:
+            self.pid_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.pid_file, 'w') as f:
+                data = {
+                    'pid': os.getpid(),
+                    'host': self.host,
+                    'port': self.port,
+                    'start_time': datetime.now().isoformat()
+                }
+                json.dump(data, f)
+            logger.debug(f"PID 文件已写入: {self.pid_file}")
+        except Exception as e:
+            logger.error(f"写入 PID 文件失败: {e}")
+
+    def _remove_pid(self):
+        """删除 PID 文件"""
+        try:
+            if self.pid_file.exists():
+                self.pid_file.unlink()
+                logger.debug(f"PID 文件已删除: {self.pid_file}")
+        except Exception as e:
+            logger.error(f"删除 PID 文件失败: {e}")
+
+    @staticmethod
+    def get_running_server():
+        """获取正在运行的服务器信息
+
+        Returns:
+            服务器信息字典，如果没有运行则返回 None
+        """
+        pid_file = Path.home() / '.qcc' / 'proxy.pid'
+
+        if not pid_file.exists():
+            return None
+
+        try:
+            with open(pid_file, 'r') as f:
+                data = json.load(f)
+
+            pid = data.get('pid')
+            if not pid:
+                return None
+
+            # 检查进程是否存在
+            try:
+                os.kill(pid, 0)  # 发送信号 0 只检查进程是否存在
+                return data
+            except OSError:
+                # 进程不存在，清理 PID 文件
+                pid_file.unlink()
+                return None
+
+        except Exception as e:
+            logger.error(f"读取 PID 文件失败: {e}")
+            return None
+
+    @staticmethod
+    def stop_running_server():
+        """停止正在运行的服务器
+
+        Returns:
+            是否成功停止
+        """
+        server_info = ProxyServer.get_running_server()
+
+        if not server_info:
+            return False
+
+        pid = server_info['pid']
+
+        try:
+            # 发送 SIGTERM 信号
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"已向进程 {pid} 发送停止信号")
+            return True
+        except OSError as e:
+            logger.error(f"停止进程失败: {e}")
+            return False
 
     async def __aenter__(self):
         """上下文管理器入口"""

@@ -24,11 +24,17 @@
    - 故障恢复和历史追踪
    - 实时监控和告警通知
 
-4. **[intelligent-health-check.md](./intelligent-health-check.md)** - 智能健康检测 🆕
+4. **[intelligent-health-check.md](./intelligent-health-check.md)** - 智能健康检测 ✅ 已实现
    - 真实对话测试取代 ping
    - 多维度性能评估
    - 动态权重自动调整
    - 性能指标统计分析
+
+5. **[intelligent-health-check-implementation.md](./intelligent-health-check-implementation.md)** - 实现报告 🆕
+   - 完整的实现细节和代码结构
+   - 20个测试用例（100%通过）
+   - 使用示例和配置指南
+   - 集成指南和待办事项
 
 ---
 
@@ -301,11 +307,12 @@ fastcc/
 - [ ] **并发控制器** (新增)
 
 ### Phase 2: 负载均衡与健康检测 (5-7 天)
-- [ ] 负载均衡器实现
-- [ ] **分级健康检测** (快速/轻量/深度)
-- [ ] **Endpoint 配置复用功能** (新增)
-- [ ] 多种负载均衡策略
-- [ ] **动态权重调整** (新增)
+- [x] 负载均衡器实现 ✅
+- [x] **智能健康检测** (对话测试/多维度评估) ✅ 已完成
+- [x] **Endpoint 数据模型** ✅
+- [x] 多种负载均衡策略 ✅
+- [x] **动态权重调整** ✅ 已完成
+- [ ] **Endpoint 配置复用功能** (CLI命令待实现)
 
 ### Phase 3: 故障转移机制 (7-10 天)
 - [ ] **Priority Manager 实现** (新增)
@@ -443,6 +450,15 @@ claude
 - ✅ 添加 Endpoint 配置复用功能设计
 - ✅ 添加自动故障转移机制设计
 - ✅ 完善使用示例和测试用例
+- ✅ **实现智能健康检测系统** (4个核心模块)
+  - ✅ 健康检查数据模型 (health_check_models.py)
+  - ✅ 性能指标统计 (performance_metrics.py)
+  - ✅ 动态权重调整器 (weight_adjuster.py)
+  - ✅ 对话式健康检查器 (conversational_checker.py)
+- ✅ **升级健康监控器** (health_monitor.py)
+- ✅ **添加 health CLI 命令组**
+- ✅ **编写 20 个测试用例** (100% 通过)
+- ✅ **创建演示脚本和实现报告**
 
 ---
 

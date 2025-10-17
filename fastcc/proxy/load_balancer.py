@@ -11,6 +11,7 @@ class LoadBalanceStrategy(Enum):
     ROUND_ROBIN = "round_robin"  # 轮询
     RANDOM = "random"  # 随机
     LEAST_CONNECTIONS = "least_connections"  # 最少连接
+    PRIORITY_FAILOVER = "priority_failover"  # 主备优先级（优先使用低priority值的节点）
 
 
 class LoadBalancer:
@@ -54,6 +55,8 @@ class LoadBalancer:
             return self._random_select(healthy_endpoints)
         elif self.strategy == LoadBalanceStrategy.LEAST_CONNECTIONS:
             return self._least_connections_select(healthy_endpoints)
+        elif self.strategy == LoadBalanceStrategy.PRIORITY_FAILOVER:
+            return self._priority_failover_select(healthy_endpoints)
 
         return healthy_endpoints[0]
 
@@ -86,3 +89,22 @@ class LoadBalancer:
     def _least_connections_select(self, endpoints: List):
         """最少连接选择（基于总请求数）"""
         return min(endpoints, key=lambda ep: ep.health_status['total_requests'])
+
+    def _priority_failover_select(self, endpoints: List):
+        """主备优先级选择
+
+        按照 priority 值从小到大排序，始终选择优先级最高（数字最小）的健康节点。
+        只有当高优先级节点不健康时，才会自动切换到低优先级节点。
+        一旦高优先级节点恢复健康，下次请求会立即切换回去。
+
+        Args:
+            endpoints: 健康的 endpoint 列表
+
+        Returns:
+            优先级最高的健康 endpoint
+        """
+        # 按 priority 值从小到大排序（数字越小优先级越高）
+        sorted_endpoints = sorted(endpoints, key=lambda ep: ep.priority)
+
+        # 返回优先级最高（priority 值最小）的节点
+        return sorted_endpoints[0]

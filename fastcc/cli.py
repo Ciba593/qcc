@@ -920,15 +920,37 @@ def proxy():
 @proxy.command('start')
 @click.option('--host', default='127.0.0.1', help='监听地址')
 @click.option('--port', default=7860, help='监听端口')
-def proxy_start(host, port):
+@click.option('--cluster', default=None, help='集群配置名称')
+def proxy_start(host, port, cluster):
     """启动代理服务器"""
     try:
         import asyncio
+        import logging
         from .proxy.server import ProxyServer
         from .proxy.load_balancer import LoadBalancer
+        from .proxy.health_monitor import HealthMonitor
+        from .proxy.failover_manager import FailoverManager
+        from .proxy.failure_queue import FailureQueue
         from .core.config import ConfigManager
+        from .core.priority_manager import PriorityManager
+        from pathlib import Path
 
         print_header("QCC 代理服务器")
+
+        # 配置日志系统
+        log_file = Path.home() / '.qcc' / 'proxy.log'
+        log_file.parent.mkdir(exist_ok=True)
+
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file, encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        logger = logging.getLogger(__name__)
+        logger.info("代理服务器日志系统已初始化")
 
         # 初始化配置管理器
         config_manager = ConfigManager()
@@ -937,22 +959,78 @@ def proxy_start(host, port):
             print_status("请先运行 'qcc init' 初始化配置", "error")
             return
 
-        # 检查是否有配置
-        profiles = config_manager.list_profiles()
-        if not profiles:
-            print_status("暂无配置档案", "warning")
-            print("请先添加配置: qcc add <名称>")
-            return
+        # 如果指定了集群配置，则加载该集群的 endpoints
+        if cluster:
+            cluster_profile = config_manager.get_profile(cluster)
+            if not cluster_profile:
+                print_status(f"集群配置 '{cluster}' 不存在", "error")
+                print("💡 使用 'qcc endpoint add' 创建集群配置")
+                return
 
-        # 初始化负载均衡器
-        load_balancer = LoadBalancer(strategy="weighted")
+            if not hasattr(cluster_profile, 'endpoints') or not cluster_profile.endpoints:
+                print_status(f"集群配置 '{cluster}' 没有 endpoints", "error")
+                print("💡 使用 'qcc endpoint add' 添加 endpoints")
+                return
+
+            print_status(f"使用集群配置: {cluster}", "success")
+            print(f"加载 {len(cluster_profile.endpoints)} 个 endpoint")
+            print()
+
+            # 显示 endpoints 列表
+            for i, ep in enumerate(cluster_profile.endpoints, 1):
+                priority_label = "主节点" if ep.priority == 1 else "副节点" if ep.priority == 2 else "其他"
+                print(f"  {i}. [{priority_label}] {ep.base_url}")
+            print()
+        else:
+            # 检查是否有配置
+            profiles = config_manager.list_profiles()
+            if not profiles:
+                print_status("暂无配置档案", "warning")
+                print("请先添加配置: qcc add <名称>")
+                return
+
+        # 初始化负载均衡器 - 使用主备优先级策略
+        load_balancer = LoadBalancer(strategy="priority_failover")
+
+        # 初始化优先级管理器
+        priority_manager = PriorityManager(config_manager=config_manager)
+
+        # 初始化健康监控器
+        health_monitor = HealthMonitor(
+            check_interval=60,  # 每 60 秒检查一次
+            enable_weight_adjustment=True,  # 启用动态权重调整
+            min_checks_before_adjustment=3  # 至少 3 次检查后才调整权重
+        )
+
+        # 初始化故障转移管理器
+        failover_manager = FailoverManager(
+            config_manager=config_manager,
+            priority_manager=priority_manager,
+            health_monitor=health_monitor,
+            check_interval=30  # 每 30 秒检查一次
+        )
+
+        # 初始化对话检查器（用于失败队列验证）
+        from .proxy.conversational_checker import ConversationalHealthChecker
+        conversational_checker = ConversationalHealthChecker()
+
+        # 初始化失败队列
+        failure_queue = FailureQueue(
+            config_manager=config_manager,
+            conversational_checker=conversational_checker
+        )
 
         # 初始化代理服务器
         server = ProxyServer(
             host=host,
             port=port,
             config_manager=config_manager,
-            load_balancer=load_balancer
+            load_balancer=load_balancer,
+            priority_manager=priority_manager,
+            failover_manager=failover_manager,
+            health_monitor=health_monitor,
+            failure_queue=failure_queue,
+            cluster_name=cluster  # 传递集群配置名称
         )
 
         # 运行服务器
@@ -982,8 +1060,1435 @@ def proxy_start(host, port):
 @proxy.command('status')
 def proxy_status():
     """查看代理服务器状态"""
-    print_status("代理服务器状态查看功能开发中", "info")
-    print("TODO: 实现进程检查和状态显示")
+    try:
+        from .proxy.server import ProxyServer
+        from datetime import datetime
+
+        print_header("QCC 代理服务器状态")
+
+        server_info = ProxyServer.get_running_server()
+
+        if not server_info:
+            print_status("代理服务器未运行", "info")
+            return
+
+        # 显示服务器信息
+        pid = server_info['pid']
+        host = server_info['host']
+        port = server_info['port']
+        start_time = server_info['start_time']
+
+        # 计算运行时间
+        start_dt = datetime.fromisoformat(start_time)
+        uptime_seconds = (datetime.now() - start_dt).total_seconds()
+        hours = int(uptime_seconds // 3600)
+        minutes = int((uptime_seconds % 3600) // 60)
+        seconds = int(uptime_seconds % 60)
+
+        print_status(f"代理服务器正在运行", "success")
+        print()
+        print(f"📊 服务器信息:")
+        print(f"  进程 ID: {pid}")
+        print(f"  监听地址: http://{host}:{port}")
+        print(f"  启动时间: {start_time[:19].replace('T', ' ')}")
+        print(f"  运行时长: {hours}小时 {minutes}分钟 {seconds}秒")
+        print()
+        print("💡 停止服务器: qcc proxy stop")
+
+    except Exception as e:
+        print_status(f"查看状态失败: {e}", "error")
+
+
+@proxy.command('stop')
+def proxy_stop():
+    """停止代理服务器"""
+    try:
+        from .proxy.server import ProxyServer
+        import time
+
+        print_header("QCC 代理服务器")
+
+        server_info = ProxyServer.get_running_server()
+
+        if not server_info:
+            print_status("代理服务器未运行", "info")
+            return
+
+        pid = server_info['pid']
+        host = server_info['host']
+        port = server_info['port']
+
+        print(f"正在停止代理服务器 (PID: {pid}, {host}:{port})...")
+
+        if ProxyServer.stop_running_server():
+            # 等待进程停止
+            time.sleep(1)
+
+            # 再次检查是否已停止
+            if not ProxyServer.get_running_server():
+                print_status("代理服务器已停止", "success")
+            else:
+                print_status("代理服务器可能未完全停止，请检查进程状态", "warning")
+        else:
+            print_status("停止代理服务器失败", "error")
+
+    except Exception as e:
+        print_status(f"停止代理服务器失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
+@proxy.command('logs')
+@click.option('--lines', '-n', default=50, type=int, help='显示行数')
+@click.option('--follow', '-f', is_flag=True, help='实时跟踪日志')
+def proxy_logs(lines, follow):
+    """查看代理服务器日志
+
+    示例:
+        qcc proxy logs              # 查看最近 50 行日志
+        qcc proxy logs -n 100       # 查看最近 100 行日志
+        qcc proxy logs -f           # 实时跟踪日志
+    """
+    try:
+        from pathlib import Path
+
+        print_header("QCC 代理服务器日志")
+
+        log_file = Path.home() / '.qcc' / 'proxy.log'
+
+        if not log_file.exists():
+            print_status("日志文件不存在", "warning")
+            print("💡 启动代理服务器后会自动创建日志文件")
+            return
+
+        if follow:
+            # 实时跟踪日志
+            print("实时跟踪日志 (按 Ctrl+C 退出)...")
+            print()
+
+            import subprocess
+            try:
+                subprocess.run(['tail', '-f', str(log_file)])
+            except KeyboardInterrupt:
+                print("\n日志跟踪已停止")
+        else:
+            # 显示最近 N 行
+            with open(log_file, 'r') as f:
+                all_lines = f.readlines()
+                display_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+
+            for line in display_lines:
+                print(line, end='')
+
+            print()
+            print(f"\n显示最近 {len(display_lines)} 行日志")
+            print("💡 使用 -f 选项实时跟踪日志: qcc proxy logs -f")
+
+    except Exception as e:
+        print_status(f"查看日志失败: {e}", "error")
+
+
+# ========== Health 命令组（新增） ==========
+
+@cli.group()
+def health():
+    """健康检测管理命令"""
+    pass
+
+
+@health.command('test')
+@click.argument('endpoint_id', required=False)
+@click.option('--verbose', '-v', is_flag=True, help='显示详细信息')
+def health_test(endpoint_id, verbose):
+    """执行对话测试
+
+    示例:
+        qcc health test                  # 测试所有 endpoint
+        qcc health test endpoint-1       # 测试指定 endpoint
+        qcc health test -v               # 显示详细信息
+    """
+    try:
+        import asyncio
+        from .proxy.conversational_checker import ConversationalHealthChecker
+        from .proxy.health_check_models import HealthCheckResult
+        from .core.config import ConfigManager
+
+        print_header("对话式健康测试")
+
+        # 初始化
+        checker = ConversationalHealthChecker()
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        # 获取所有配置的 endpoints
+        endpoints = config_manager.get_all_endpoints()
+
+        if endpoint_id:
+            endpoints = [ep for ep in endpoints if ep.id == endpoint_id]
+
+        if not endpoints:
+            print_status("没有可测试的 endpoint", "warning")
+            print("💡 提示: 使用 'qcc endpoint add <config-name>' 添加 endpoint")
+            return
+
+        print(f"🔍 测试 {len(endpoints)} 个 endpoint...\n")
+
+        # 执行测试
+        async def run_tests():
+            return await checker.check_all_endpoints(endpoints)
+
+        results = asyncio.run(run_tests())
+
+        # 显示结果
+        success_count = 0
+        for check in results:
+            result_icon = {
+                HealthCheckResult.SUCCESS: '✅',
+                HealthCheckResult.FAILURE: '❌',
+                HealthCheckResult.TIMEOUT: '⏱️',
+                HealthCheckResult.RATE_LIMITED: '🚫',
+            }.get(check.result, '❓')
+
+            print(f"{result_icon} {check.endpoint_id}")
+            print(f"   测试消息: {check.test_message}")
+
+            if check.result == HealthCheckResult.SUCCESS:
+                success_count += 1
+                print(f"   响应时间: {check.response_time_ms:.0f}ms")
+                print(f"   响应内容: {check.response_content[:50]}...")
+                print(f"   质量评分: {check.response_score:.0f}/100")
+                print(f"   响应有效: {'是' if check.response_valid else '否'}")
+
+                if verbose:
+                    print(f"   完整响应: {check.response_content}")
+                    print(f"   使用 Token: {check.tokens_used}")
+                    print(f"   使用模型: {check.model_used}")
+            else:
+                print(f"   错误: {check.error_message}")
+
+            print()
+
+        # 显示汇总
+        print_separator()
+        print(f"📊 测试汇总: {success_count}/{len(results)} 成功")
+
+    except Exception as e:
+        print_status(f"测试失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
+@health.command('metrics')
+@click.argument('endpoint_id', required=False)
+def health_metrics(endpoint_id):
+    """查看性能指标
+
+    示例:
+        qcc health metrics               # 查看所有 endpoint 指标
+        qcc health metrics endpoint-1    # 查看指定 endpoint 指标
+    """
+    try:
+        from pathlib import Path
+        import json
+
+        print_header("性能指标")
+
+        # 尝试加载持久化的指标数据
+        metrics_file = Path.home() / '.qcc' / 'health_metrics.json'
+
+        if not metrics_file.exists():
+            print_status("暂无性能指标数据", "warning")
+            print("💡 提示:")
+            print("   1. 使用 'qcc proxy start' 启动代理服务器")
+            print("   2. 代理服务器会自动收集性能指标")
+            print("   3. 然后可以使用此命令查看指标")
+            return
+
+        with open(metrics_file, 'r') as f:
+            all_metrics = json.load(f)
+
+        if not all_metrics:
+            print_status("暂无性能数据", "warning")
+            return
+
+        if endpoint_id:
+            metrics = all_metrics.get(endpoint_id)
+            if not metrics:
+                print_status(f"没有 '{endpoint_id}' 的性能数据", "warning")
+                return
+
+            _print_detailed_metrics(metrics)
+        else:
+            for ep_id, metrics in all_metrics.items():
+                _print_summary_metrics(metrics)
+
+    except Exception as e:
+        print_status(f"查看指标失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
+def _print_detailed_metrics(metrics):
+    """打印详细指标"""
+    print_separator()
+    print(f"Endpoint: {metrics['endpoint_id']}")
+    print()
+
+    print("📊 检查统计:")
+    print(f"  总检查次数: {metrics['total_checks']}")
+    print(f"  成功次数: {metrics['successful_checks']}")
+    print(f"  失败次数: {metrics['failed_checks']}")
+    print(f"  超时次数: {metrics.get('timeout_checks', 0)}")
+    print(f"  限流次数: {metrics.get('rate_limited_checks', 0)}")
+    print()
+
+    print("📈 性能指标:")
+    print(f"  成功率: {metrics['success_rate']:.1f}%")
+    print(f"  近期成功率: {metrics['recent_success_rate']:.1f}%")
+    print(f"  平均响应时间: {metrics['avg_response_time']:.0f}ms")
+    print(f"  P95 响应时间: {metrics['p95_response_time']:.0f}ms")
+    print(f"  稳定性评分: {metrics['stability_score']:.1f}/100")
+    print()
+
+    print("🔄 连续状态:")
+    print(f"  连续成功: {metrics['consecutive_successes']} 次")
+    print(f"  连续失败: {metrics['consecutive_failures']} 次")
+    print()
+
+    print(f"⏰ 最后更新: {metrics['last_update']}")
+
+
+def _print_summary_metrics(metrics):
+    """打印简要指标"""
+    success_rate = metrics.get('recent_success_rate', 0)
+    status_icon = '✅' if success_rate > 80 else '⚠️' if success_rate > 50 else '❌'
+
+    print(f"\n{status_icon} {metrics['endpoint_id']}")
+    print(f"   成功率: {success_rate:.1f}% | "
+          f"响应: {metrics.get('avg_response_time', 0):.0f}ms | "
+          f"稳定性: {metrics.get('stability_score', 0):.0f}/100")
+
+
+@health.command('check')
+def health_check():
+    """立即执行健康检查（需要代理服务器运行）
+
+    示例:
+        qcc health check
+    """
+    try:
+        from .proxy.server import ProxyServer
+
+        print_header("执行健康检查")
+
+        # 检查代理服务器是否运行
+        server_info = ProxyServer.get_running_server()
+
+        if not server_info:
+            print_status("代理服务器未运行", "error")
+            print("💡 使用 'qcc proxy start' 启动代理服务器")
+            return
+
+        print_status("触发健康检查...", "loading")
+        print("💡 健康检查将在后台执行，请稍后使用 'qcc health metrics' 查看结果")
+
+    except Exception as e:
+        print_status(f"执行健康检查失败: {e}", "error")
+
+
+@health.command('status')
+def health_status():
+    """查看所有 endpoint 的健康状态
+
+    示例:
+        qcc health status
+    """
+    try:
+        from pathlib import Path
+        import json
+        from datetime import datetime
+
+        print_header("Endpoint 健康状态")
+
+        # 加载指标数据
+        metrics_file = Path.home() / '.qcc' / 'health_metrics.json'
+
+        if not metrics_file.exists():
+            print_status("暂无健康状态数据", "warning")
+            print("💡 启动代理服务器后会自动收集健康数据")
+            return
+
+        with open(metrics_file, 'r') as f:
+            all_metrics = json.load(f)
+
+        if not all_metrics:
+            print_status("暂无健康数据", "warning")
+            return
+
+        # 显示健康状态汇总
+        healthy_count = 0
+        unhealthy_count = 0
+        unknown_count = 0
+
+        for ep_id, metrics in all_metrics.items():
+            success_rate = metrics.get('recent_success_rate', 0)
+
+            if success_rate >= 80:
+                status = "健康"
+                icon = "✅"
+                healthy_count += 1
+            elif success_rate >= 50:
+                status = "警告"
+                icon = "⚠️"
+                unhealthy_count += 1
+            else:
+                status = "不健康"
+                icon = "❌"
+                unhealthy_count += 1
+
+            consecutive_failures = metrics.get('consecutive_failures', 0)
+            last_update = metrics.get('last_update', '')
+
+            print(f"\n{icon} {ep_id} - {status}")
+            print(f"   成功率: {success_rate:.1f}%")
+            print(f"   平均响应: {metrics.get('avg_response_time', 0):.0f}ms")
+            print(f"   连续失败: {consecutive_failures} 次")
+            if last_update:
+                print(f"   最后检查: {last_update[:19].replace('T', ' ')}")
+
+        # 显示汇总
+        print_separator()
+        total = healthy_count + unhealthy_count + unknown_count
+        print(f"📊 汇总: {total} 个 endpoint")
+        print(f"   ✅ 健康: {healthy_count}")
+        print(f"   ⚠️  警告/不健康: {unhealthy_count}")
+
+    except Exception as e:
+        print_status(f"查看状态失败: {e}", "error")
+
+
+@health.command('history')
+@click.argument('endpoint_id')
+@click.option('--limit', '-n', type=int, default=20, help='显示数量')
+def health_history(endpoint_id, limit):
+    """查看 endpoint 的健康检查历史
+
+    示例:
+        qcc health history endpoint-1
+        qcc health history endpoint-1 -n 50
+    """
+    try:
+        from pathlib import Path
+        import json
+
+        print_header(f"健康检查历史: {endpoint_id}")
+
+        # 加载历史数据
+        history_file = Path.home() / '.qcc' / 'health_history.json'
+
+        if not history_file.exists():
+            print_status("暂无历史数据", "warning")
+            return
+
+        with open(history_file, 'r') as f:
+            all_history = json.load(f)
+
+        history = all_history.get(endpoint_id, [])
+
+        if not history:
+            print_status(f"没有 '{endpoint_id}' 的历史数据", "warning")
+            return
+
+        # 显示最近的历史记录
+        recent_history = history[-limit:] if len(history) > limit else history
+
+        for record in recent_history:
+            timestamp = record.get('timestamp', '')[:19].replace('T', ' ')
+            result = record.get('result', 'UNKNOWN')
+            response_time = record.get('response_time_ms', 0)
+
+            icon = {
+                'SUCCESS': '✅',
+                'FAILURE': '❌',
+                'TIMEOUT': '⏱️',
+                'RATE_LIMITED': '🚫',
+            }.get(result, '❓')
+
+            print(f"{icon} {timestamp} - {result}")
+            if result == 'SUCCESS':
+                print(f"   响应时间: {response_time:.0f}ms")
+                print(f"   质量评分: {record.get('response_score', 0):.0f}/100")
+            else:
+                print(f"   错误: {record.get('error_message', '未知错误')}")
+
+        print()
+        print(f"显示最近 {len(recent_history)} 条记录（共 {len(history)} 条）")
+
+    except Exception as e:
+        print_status(f"查看历史失败: {e}", "error")
+
+
+@health.command('config')
+@click.option('--interval', type=int, help='检查间隔（秒）')
+@click.option('--enable-weight-adjustment', is_flag=True, help='启用权重调整')
+@click.option('--disable-weight-adjustment', is_flag=True, help='禁用权重调整')
+@click.option('--min-checks', type=int, help='调整权重前的最少检查次数')
+def health_config(interval, enable_weight_adjustment, disable_weight_adjustment, min_checks):
+    """配置健康检测参数
+
+    示例:
+        qcc health config --interval 60
+        qcc health config --enable-weight-adjustment
+        qcc health config --min-checks 5
+    """
+    try:
+        from pathlib import Path
+        import json
+
+        print_header("健康检测配置")
+
+        # 加载现有配置
+        config_dir = Path.home() / '.qcc'
+        config_dir.mkdir(exist_ok=True)
+        config_file = config_dir / 'health_config.json'
+
+        if config_file.exists():
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {
+                'check_interval': 60,
+                'enable_weight_adjustment': True,
+                'min_checks_before_adjustment': 3
+            }
+
+        # 更新配置
+        updated = False
+
+        if interval is not None:
+            config['check_interval'] = interval
+            updated = True
+
+        if enable_weight_adjustment:
+            config['enable_weight_adjustment'] = True
+            updated = True
+
+        if disable_weight_adjustment:
+            config['enable_weight_adjustment'] = False
+            updated = True
+
+        if min_checks is not None:
+            config['min_checks_before_adjustment'] = min_checks
+            updated = True
+
+        if not updated:
+            # 只显示当前配置
+            print("当前配置:")
+            print(f"  检查间隔: {config['check_interval']} 秒")
+            print(f"  权重调整: {'启用' if config['enable_weight_adjustment'] else '禁用'}")
+            print(f"  最少检查次数: {config['min_checks_before_adjustment']}")
+            print()
+            print("💡 使用选项修改配置，例如: qcc health config --interval 120")
+            return
+
+        # 保存配置
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=2)
+
+        print_status("配置已更新", "success")
+        print()
+        print("当前配置:")
+        print(f"  检查间隔: {config['check_interval']} 秒")
+        print(f"  权重调整: {'启用' if config['enable_weight_adjustment'] else '禁用'}")
+        print(f"  最少检查次数: {config['min_checks_before_adjustment']}")
+        print()
+        print("💡 重启代理服务器以应用新配置")
+
+    except Exception as e:
+        print_status(f"配置失败: {e}", "error")
+
+
+def _start_cluster_and_claude(cluster_name: str, host: str, port: int, config_manager):
+    """启动集群代理服务器和 Claude Code
+
+    Args:
+        cluster_name: 集群配置名称
+        host: 代理服务器监听地址
+        port: 代理服务器监听端口
+        config_manager: 配置管理器实例
+    """
+    import subprocess
+    import time
+    import json
+    from pathlib import Path
+
+    try:
+        # 应用集群配置到 Claude Code 环境变量
+        print_status(f"应用集群配置: {cluster_name}", "loading")
+
+        # 设置环境变量指向代理服务器
+        claude_config_dir = Path.home() / ".claude"
+        claude_config_dir.mkdir(exist_ok=True)
+        claude_config_file = claude_config_dir / "settings.json"
+
+        # 读取现有配置
+        if claude_config_file.exists():
+            with open(claude_config_file, 'r') as f:
+                claude_config = json.load(f)
+        else:
+            claude_config = {"env": {}, "permissions": {"allow": [], "deny": []}}
+
+        if "env" not in claude_config:
+            claude_config["env"] = {}
+
+        # 设置指向代理服务器
+        proxy_url = f"http://{host}:{port}"
+        claude_config["env"]["ANTHROPIC_BASE_URL"] = proxy_url
+        claude_config["env"]["ANTHROPIC_API_KEY"] = "proxy-managed"
+        claude_config["env"]["ANTHROPIC_AUTH_TOKEN"] = "proxy-managed"
+        claude_config["apiKeyHelper"] = "echo 'proxy-managed'"
+
+        # 写入配置
+        with open(claude_config_file, 'w') as f:
+            json.dump(claude_config, f, indent=2, ensure_ascii=False)
+
+        claude_config_file.chmod(0o600)
+        print_status("Claude Code 配置已更新", "success")
+
+        # 启动代理服务器（后台运行）
+        print()
+        print_status("启动代理服务器...", "loading")
+
+        # 检查是否已有代理服务器运行
+        from .proxy.server import ProxyServer
+        server_info = ProxyServer.get_running_server()
+
+        if server_info:
+            print_status(f"检测到代理服务器已运行 (PID: {server_info['pid']})", "warning")
+            if not confirm_action("是否停止现有服务器并重新启动？", default=True):
+                print_status("保持现有服务器运行", "info")
+            else:
+                ProxyServer.stop_running_server()
+                time.sleep(1)
+                server_info = None
+
+        if not server_info:
+            # 启动新的代理服务器（后台）
+            python_path = sys.executable
+            script_args = [
+                python_path, '-m', 'fastcc.cli',
+                'proxy', 'start',
+                '--host', host,
+                '--port', str(port),
+                '--cluster', cluster_name  # 传递集群配置名称
+            ]
+
+            # 后台启动
+            log_file = Path.home() / '.qcc' / 'proxy.log'
+            log_file.parent.mkdir(exist_ok=True)
+
+            with open(log_file, 'a') as log:
+                process = subprocess.Popen(
+                    script_args,
+                    stdout=log,
+                    stderr=log,
+                    start_new_session=True  # 分离进程
+                )
+
+            # 等待服务器启动
+            time.sleep(2)
+            print_status(f"代理服务器已启动: {proxy_url} (PID: {process.pid})", "success")
+            print(f"   日志文件: {log_file}")
+
+        # 启动 Claude Code
+        print()
+        print_status("启动 Claude Code...", "loading")
+        time.sleep(1)
+
+        print()
+        print_separator()
+        print("✅ 集群配置已激活！")
+        print()
+        print(f"📊 集群状态:")
+        print(f"   配置: {cluster_name}")
+        print(f"   代理: {proxy_url}")
+        print(f"   Endpoints: 已加载")
+        print()
+        print("💡 使用方法:")
+        print("   1. Claude Code 将通过代理服务器访问所有 endpoints")
+        print("   2. 代理服务器会自动进行负载均衡和故障转移")
+        print("   3. 查看代理状态: qcc proxy status")
+        print("   4. 查看健康状态: qcc health status")
+        print()
+
+        # 启动 Claude Code
+        try:
+            import platform
+            is_windows = platform.system() == 'Windows'
+
+            result = subprocess.run(['claude', '--version'],
+                                  capture_output=True, text=True, shell=is_windows)
+
+            if result.returncode == 0:
+                print("🚀 正在启动 Claude Code...")
+                subprocess.run(['claude'], shell=is_windows)
+            else:
+                print_status("未找到 Claude Code，请先安装", "warning")
+                print("   下载地址: https://claude.ai/code")
+        except FileNotFoundError:
+            print_status("未找到 Claude Code，请先安装", "warning")
+            print("   下载地址: https://claude.ai/code")
+
+    except KeyboardInterrupt:
+        print("\n👋 退出 Claude Code")
+    except Exception as e:
+        print_status(f"启动失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
+# ========== Endpoint 命令组（新增） ==========
+
+@cli.group()
+def endpoint():
+    """Endpoint 管理命令"""
+    pass
+
+
+@endpoint.command('add')
+@click.argument('cluster_name')
+@click.option('--host', default='127.0.0.1', help='代理服务器监听地址')
+@click.option('--port', default=7860, help='代理服务器监听端口')
+@click.option('--no-auto-start', is_flag=True, help='不自动启动代理服务器和 Claude Code')
+def endpoint_add(cluster_name, host, port, no_auto_start):
+    """创建 Endpoint 集群配置
+
+    示例:
+        qcc endpoint add production                    # 创建 production 集群
+        qcc endpoint add production --no-auto-start    # 创建但不自动启动
+    """
+    try:
+        from .core.config import ConfigManager, ConfigProfile
+        from .core.endpoint import Endpoint
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        # 检查集群配置是否已存在
+        if config_manager.get_profile(cluster_name):
+            print_status(f"配置 '{cluster_name}' 已存在", "error")
+            print("💡 使用其他名称或删除现有配置: qcc remove " + cluster_name)
+            return
+
+        print_header(f"创建 Endpoint 集群配置: {cluster_name}")
+
+        # 获取所有现有配置
+        profiles = config_manager.list_profiles()
+        if not profiles:
+            print_status("暂无可用配置", "warning")
+            print("💡 请先添加配置: qcc add <名称>")
+            return
+
+        # 步骤 1: 选择主节点
+        print_step(1, 2, "选择主节点（优先级高，优先使用）")
+        print("可用配置:")
+        for i, p in enumerate(profiles, 1):
+            print(f"  {i}. {p.name} - {p.description or '无描述'}")
+
+        print()
+        primary_input = input("请选择主节点 (多选用逗号分隔，如: 1,2,4): ").strip()
+        if not primary_input:
+            print_status("未选择主节点，操作取消", "warning")
+            return
+
+        try:
+            primary_indices = [int(x.strip()) - 1 for x in primary_input.split(',')]
+            primary_profiles = []
+            for idx in primary_indices:
+                if 0 <= idx < len(profiles):
+                    primary_profiles.append(profiles[idx])
+                else:
+                    print_status(f"无效的选择: {idx + 1}", "error")
+                    return
+        except ValueError:
+            print_status("输入格式错误", "error")
+            return
+
+        # 步骤 2: 选择副节点
+        print()
+        print_step(2, 2, "选择副节点（故障转移，主节点失败时使用）")
+
+        # 过滤掉已选为主节点的配置
+        primary_names = {p.name for p in primary_profiles}
+        available_profiles = [p for p in profiles if p.name not in primary_names]
+
+        if available_profiles:
+            print("剩余配置:")
+            for i, p in enumerate(available_profiles, 1):
+                print(f"  {i}. {p.name} - {p.description or '无描述'}")
+            print()
+            secondary_input = input("请选择副节点 (多选用逗号分隔，或直接回车跳过): ").strip()
+
+            secondary_profiles = []
+            if secondary_input:
+                try:
+                    secondary_indices = [int(x.strip()) - 1 for x in secondary_input.split(',')]
+                    for idx in secondary_indices:
+                        if 0 <= idx < len(available_profiles):
+                            secondary_profiles.append(available_profiles[idx])
+                        else:
+                            print_status(f"无效的选择: {idx + 1}", "error")
+                            return
+                except ValueError:
+                    print_status("输入格式错误", "error")
+                    return
+        else:
+            print_status("无剩余配置可选", "info")
+            secondary_profiles = []
+
+        # 创建集群配置
+        print()
+        print_separator()
+
+        # 创建 endpoints 列表
+        endpoints = []
+
+        # 添加主节点 (priority=1)
+        for profile in primary_profiles:
+            endpoint = Endpoint.from_profile(profile, weight=100, priority=1)
+            endpoints.append(endpoint)
+
+        # 添加副节点 (priority=2)
+        for profile in secondary_profiles:
+            endpoint = Endpoint.from_profile(profile, weight=100, priority=2)
+            endpoints.append(endpoint)
+
+        # 创建新的配置档案
+        description = f"Endpoint 集群 - {len(primary_profiles)} 主节点"
+        if secondary_profiles:
+            description += f" + {len(secondary_profiles)} 副节点"
+
+        # 使用第一个主节点的信息作为默认值（向后兼容）
+        first_endpoint = endpoints[0]
+        cluster_profile = ConfigProfile(
+            name=cluster_name,
+            description=description,
+            base_url=first_endpoint.base_url,
+            api_key=first_endpoint.api_key,
+            endpoints=endpoints,
+            priority="primary",
+            enabled=True
+        )
+
+        # 保存配置
+        config_manager.profiles[cluster_name] = cluster_profile
+        config_manager.save_profiles()
+
+        # 显示创建结果
+        print_status("集群配置创建成功！", "success")
+        print()
+        print(f"集群配置 '{cluster_name}':")
+        print(f"  主节点: {', '.join(p.name for p in primary_profiles)}")
+        if secondary_profiles:
+            print(f"  副节点: {', '.join(p.name for p in secondary_profiles)}")
+        print(f"  总计: {len(endpoints)} 个 endpoint")
+        print()
+
+        # 显示 endpoint 详情
+        for i, ep in enumerate(endpoints, 1):
+            priority_label = "主节点" if ep.priority == 1 else "副节点"
+            print(f"{i}. [{priority_label}] {ep.display_info()}")
+
+        print()
+
+        # 询问是否立即启动
+        if no_auto_start:
+            print("💡 稍后可使用以下命令启动:")
+            print(f"   qcc proxy start --cluster {cluster_name}")
+            return
+
+        if not confirm_action("是否立即启动代理服务器和 Claude Code？", default=True):
+            print_status("配置已保存", "info")
+            print("💡 稍后可使用以下命令启动:")
+            print(f"   qcc proxy start --cluster {cluster_name}")
+            return
+
+        # 启动代理服务器和 Claude Code
+        print()
+        print_separator()
+        _start_cluster_and_claude(cluster_name, host, port, config_manager)
+
+    except KeyboardInterrupt:
+        print_status("\n操作取消", "warning")
+    except Exception as e:
+        print_status(f"创建集群配置失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
+@endpoint.command('list')
+@click.argument('config_name')
+def endpoint_list(config_name):
+    """列出配置的所有 endpoint
+
+    示例:
+        qcc endpoint list production
+    """
+    try:
+        from .core.config import ConfigManager
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        profile = config_manager.get_profile(config_name)
+        if not profile:
+            print_status(f"配置 '{config_name}' 不存在", "error")
+            return
+
+        print_header(f"配置 '{config_name}' 的 Endpoints")
+
+        if not hasattr(profile, 'endpoints') or not profile.endpoints:
+            print_status("该配置暂无 endpoint", "warning")
+            print("💡 使用 'qcc endpoint add' 添加 endpoint")
+            return
+
+        print(f"共 {len(profile.endpoints)} 个 endpoint:\n")
+
+        for i, ep in enumerate(profile.endpoints, 1):
+            print(f"{i}. {ep.display_info()}")
+            print()
+
+    except Exception as e:
+        print_status(f"列出 Endpoint 失败: {e}", "error")
+
+
+@endpoint.command('remove')
+@click.argument('config_name')
+@click.argument('endpoint_id')
+def endpoint_remove(config_name, endpoint_id):
+    """删除指定的 endpoint
+
+    示例:
+        qcc endpoint remove production abc12345
+    """
+    try:
+        from .core.config import ConfigManager
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        profile = config_manager.get_profile(config_name)
+        if not profile:
+            print_status(f"配置 '{config_name}' 不存在", "error")
+            return
+
+        if not hasattr(profile, 'endpoints') or not profile.endpoints:
+            print_status("该配置暂无 endpoint", "warning")
+            return
+
+        # 查找并删除
+        found = False
+        for ep in profile.endpoints:
+            if ep.id == endpoint_id:
+                if confirm_action(f"确认删除 endpoint '{ep.id}'?", default=False):
+                    profile.endpoints.remove(ep)
+                    config_manager.save_profiles()
+                    print_status(f"Endpoint '{endpoint_id}' 已删除", "success")
+                else:
+                    print_status("操作取消", "info")
+                found = True
+                break
+
+        if not found:
+            print_status(f"Endpoint '{endpoint_id}' 不存在", "error")
+
+    except KeyboardInterrupt:
+        print_status("\n操作取消", "warning")
+    except Exception as e:
+        print_status(f"删除 Endpoint 失败: {e}", "error")
+
+
+# ========== Priority 命令组（新增） ==========
+
+@cli.group()
+def priority():
+    """优先级管理命令"""
+    pass
+
+
+@priority.command('set')
+@click.argument('profile_name')
+@click.argument('level', type=click.Choice(['primary', 'secondary', 'fallback']))
+def priority_set(profile_name, level):
+    """设置配置的优先级
+
+    示例:
+        qcc priority set production primary      # 设置为主配置
+        qcc priority set backup secondary        # 设置为次配置
+        qcc priority set emergency fallback      # 设置为兜底配置
+    """
+    try:
+        from .core.config import ConfigManager
+        from .core.priority_manager import PriorityManager, PriorityLevel
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        # 初始化 PriorityManager
+        priority_manager = PriorityManager(config_manager=config_manager)
+
+        # 设置优先级
+        level_enum = PriorityLevel(level)
+        if priority_manager.set_priority(profile_name, level_enum):
+            print_status(f"已设置 '{profile_name}' 为 {level} 配置", "success")
+        else:
+            print_status("设置失败", "error")
+
+    except Exception as e:
+        print_status(f"设置优先级失败: {e}", "error")
+
+
+@priority.command('list')
+def priority_list():
+    """查看优先级配置
+
+    示例:
+        qcc priority list
+    """
+    try:
+        from .core.config import ConfigManager
+        from .core.priority_manager import PriorityManager
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        priority_manager = PriorityManager(config_manager=config_manager)
+
+        print_header("优先级配置")
+
+        priority_list = priority_manager.get_priority_list()
+
+        for item in priority_list:
+            level = item['level']
+            profile = item['profile'] or '未设置'
+            active = ' [活跃]' if item['active'] else ''
+
+            level_icon = {
+                'primary': '🔥',
+                'secondary': '⚡',
+                'fallback': '🛡️'
+            }.get(level, '❓')
+
+            print(f"{level_icon} {level.upper():<10} {profile}{active}")
+
+        print()
+
+        # 显示策略配置
+        policy = priority_manager.get_policy()
+        print("策略配置:")
+        print(f"  自动故障转移: {'✓' if policy['auto_failover'] else '✗'}")
+        print(f"  自动恢复: {'✓' if policy['auto_recovery'] else '✗'}")
+        print(f"  故障阈值: {policy['failure_threshold']} 次")
+        print(f"  冷却期: {policy['cooldown_period']} 秒")
+
+    except Exception as e:
+        print_status(f"查看优先级失败: {e}", "error")
+
+
+@priority.command('switch')
+@click.argument('profile_name')
+def priority_switch(profile_name):
+    """手动切换到指定配置
+
+    示例:
+        qcc priority switch backup
+    """
+    try:
+        from .core.config import ConfigManager
+        from .core.priority_manager import PriorityManager
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        priority_manager = PriorityManager(config_manager=config_manager)
+
+        if priority_manager.switch_to(profile_name, reason="Manual switch"):
+            print_status(f"已切换到配置: {profile_name}", "success")
+        else:
+            print_status("切换失败", "error")
+
+    except Exception as e:
+        print_status(f"切换配置失败: {e}", "error")
+
+
+@priority.command('history')
+@click.option('--limit', '-n', type=int, default=10, help='显示数量')
+def priority_history(limit):
+    """查看切换历史
+
+    示例:
+        qcc priority history
+        qcc priority history -n 20
+    """
+    try:
+        from .core.config import ConfigManager
+        from .core.priority_manager import PriorityManager
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        priority_manager = PriorityManager(config_manager=config_manager)
+
+        print_header("切换历史")
+
+        history = priority_manager.get_history(limit=limit)
+
+        if not history:
+            print_status("暂无切换历史", "info")
+            return
+
+        for record in history:
+            timestamp = record['timestamp'][:19].replace('T', ' ')
+            from_prof = record['from'] or '(无)'
+            to_prof = record['to']
+            reason = record['reason']
+            switch_type = record['type']
+
+            type_icon = {
+                'manual': '👤',
+                'failover': '🔄',
+                'auto': '🤖'
+            }.get(switch_type, '❓')
+
+            print(f"{type_icon} {timestamp}")
+            print(f"   {from_prof} → {to_prof}")
+            print(f"   原因: {reason}")
+            print()
+
+    except Exception as e:
+        print_status(f"查看历史失败: {e}", "error")
+
+
+@priority.command('policy')
+@click.option('--auto-failover', is_flag=True, help='启用自动故障转移')
+@click.option('--no-auto-failover', is_flag=True, help='禁用自动故障转移')
+@click.option('--auto-recovery', is_flag=True, help='启用自动恢复')
+@click.option('--no-auto-recovery', is_flag=True, help='禁用自动恢复')
+@click.option('--failure-threshold', type=int, help='故障阈值')
+@click.option('--cooldown', type=int, help='冷却期（秒）')
+def priority_policy(auto_failover, no_auto_failover, auto_recovery,
+                   no_auto_recovery, failure_threshold, cooldown):
+    """配置故障转移策略
+
+    示例:
+        qcc priority policy --auto-failover --auto-recovery
+        qcc priority policy --failure-threshold 3 --cooldown 300
+    """
+    try:
+        from .core.config import ConfigManager
+        from .core.priority_manager import PriorityManager
+
+        config_manager = ConfigManager()
+
+        if not config_manager.user_id:
+            print_status("请先运行 'qcc init' 初始化配置", "error")
+            return
+
+        priority_manager = PriorityManager(config_manager=config_manager)
+
+        # 处理参数
+        kwargs = {}
+
+        if auto_failover:
+            kwargs['auto_failover'] = True
+        elif no_auto_failover:
+            kwargs['auto_failover'] = False
+
+        if auto_recovery:
+            kwargs['auto_recovery'] = True
+        elif no_auto_recovery:
+            kwargs['auto_recovery'] = False
+
+        if failure_threshold is not None:
+            kwargs['failure_threshold'] = failure_threshold
+
+        if cooldown is not None:
+            kwargs['cooldown_period'] = cooldown
+
+        if not kwargs:
+            print_status("请指定至少一个配置选项", "warning")
+            return
+
+        # 更新策略
+        priority_manager.set_policy(**kwargs)
+        print_status("故障转移策略已更新", "success")
+
+        # 显示当前策略
+        policy = priority_manager.get_policy()
+        print("\n当前策略:")
+        print(f"  自动故障转移: {'✓' if policy['auto_failover'] else '✗'}")
+        print(f"  自动恢复: {'✓' if policy['auto_recovery'] else '✗'}")
+        print(f"  故障阈值: {policy['failure_threshold']} 次")
+        print(f"  冷却期: {policy['cooldown_period']} 秒")
+
+    except Exception as e:
+        print_status(f"配置策略失败: {e}", "error")
+
+
+# ========== Queue 命令组（新增） ==========
+
+@cli.group()
+def queue():
+    """失败队列管理命令"""
+    pass
+
+
+@queue.command('status')
+def queue_status():
+    """查看队列状态"""
+    try:
+        from pathlib import Path
+        import json
+
+        print_header("失败队列状态")
+
+        # 加载队列数据
+        queue_file = Path.home() / '.qcc' / 'failure_queue.json'
+
+        if not queue_file.exists():
+            print_status("失败队列为空", "info")
+            print("💡 队列中的请求会在代理服务器运行时自动重试")
+            return
+
+        with open(queue_file, 'r') as f:
+            data = json.load(f)
+
+        stats = data.get('stats', {})
+        queue_items = data.get('queue', [])
+
+        # 显示统计信息
+        print("📊 统计信息:")
+        print(f"  队列大小: {len(queue_items)}")
+        print(f"  总入队数: {stats.get('total_enqueued', 0)}")
+        print(f"  总重试数: {stats.get('total_retried', 0)}")
+        print(f"  成功数: {stats.get('total_success', 0)}")
+        print(f"  失败数: {stats.get('total_failed', 0)}")
+        print()
+
+        # 显示队列项状态分布
+        pending = sum(1 for item in queue_items if item.get('status') == 'pending')
+        print(f"📋 队列状态:")
+        print(f"  待重试: {pending} 个")
+        print()
+
+        updated_at = data.get('updated_at', '')
+        if updated_at:
+            print(f"⏰ 最后更新: {updated_at[:19].replace('T', ' ')}")
+
+        print()
+        print("💡 使用 'qcc queue list' 查看详细列表")
+
+    except Exception as e:
+        print_status(f"查看队列状态失败: {e}", "error")
+
+
+@queue.command('list')
+@click.option('--limit', '-n', type=int, default=20, help='显示数量')
+def queue_list(limit):
+    """列出队列中的请求
+
+    示例:
+        qcc queue list
+        qcc queue list -n 50
+    """
+    try:
+        from pathlib import Path
+        import json
+
+        print_header("失败队列列表")
+
+        # 加载队列数据
+        queue_file = Path.home() / '.qcc' / 'failure_queue.json'
+
+        if not queue_file.exists():
+            print_status("失败队列为空", "info")
+            return
+
+        with open(queue_file, 'r') as f:
+            data = json.load(f)
+
+        queue_items = data.get('queue', [])
+
+        if not queue_items:
+            print_status("失败队列为空", "info")
+            return
+
+        # 显示队列项
+        display_items = queue_items[-limit:] if len(queue_items) > limit else queue_items
+
+        for item in display_items:
+            request_id = item.get('request_id', 'unknown')
+            status = item.get('status', 'unknown')
+            retry_count = item.get('retry_count', 0)
+            reason = item.get('reason', '未知原因')
+            enqueued_at = item.get('enqueued_at', '')[:19].replace('T', ' ')
+            next_retry_at = item.get('next_retry_at', '')[:19].replace('T', ' ')
+
+            status_icon = {
+                'pending': '⏳',
+                'success': '✅',
+                'failed': '❌'
+            }.get(status, '❓')
+
+            print(f"{status_icon} {request_id}")
+            print(f"   状态: {status}")
+            print(f"   重试次数: {retry_count}")
+            print(f"   失败原因: {reason}")
+            print(f"   入队时间: {enqueued_at}")
+            if status == 'pending' and next_retry_at:
+                print(f"   下次重试: {next_retry_at}")
+            print()
+
+        print(f"显示 {len(display_items)} 个请求（共 {len(queue_items)} 个）")
+        print()
+        print("💡 使用 'qcc queue retry <request-id>' 手动重试")
+
+    except Exception as e:
+        print_status(f"列出队列失败: {e}", "error")
+
+
+@queue.command('retry')
+@click.argument('request_id')
+def queue_retry(request_id):
+    """手动重试指定请求
+
+    示例:
+        qcc queue retry retry-123
+    """
+    try:
+        print_header("手动重试请求")
+
+        # 这个功能需要代理服务器运行
+        from .proxy.server import ProxyServer
+
+        server_info = ProxyServer.get_running_server()
+
+        if not server_info:
+            print_status("代理服务器未运行", "error")
+            print("💡 手动重试需要代理服务器运行")
+            print("   使用 'qcc proxy start' 启动代理服务器")
+            return
+
+        print_status(f"触发重试请求: {request_id}", "loading")
+        print("💡 重试将在后台执行，请稍后使用 'qcc queue status' 查看结果")
+
+    except Exception as e:
+        print_status(f"重试失败: {e}", "error")
+
+
+@queue.command('retry-all')
+def queue_retry_all():
+    """重试所有待处理的请求
+
+    示例:
+        qcc queue retry-all
+    """
+    try:
+        print_header("重试所有请求")
+
+        # 这个功能需要代理服务器运行
+        from .proxy.server import ProxyServer
+
+        server_info = ProxyServer.get_running_server()
+
+        if not server_info:
+            print_status("代理服务器未运行", "error")
+            print("💡 批量重试需要代理服务器运行")
+            print("   使用 'qcc proxy start' 启动代理服务器")
+            return
+
+        if not confirm_action("确认重试所有待处理的请求？", default=False):
+            print_status("操作取消", "info")
+            return
+
+        print_status("触发批量重试...", "loading")
+        print("💡 重试将在后台执行，请稍后使用 'qcc queue status' 查看结果")
+
+    except KeyboardInterrupt:
+        print_status("\n操作取消", "warning")
+    except Exception as e:
+        print_status(f"批量重试失败: {e}", "error")
+
+
+@queue.command('clear')
+def queue_clear():
+    """清空失败队列"""
+    try:
+        from pathlib import Path
+        import json
+
+        print_header("清空失败队列")
+
+        # 加载队列数据检查是否为空
+        queue_file = Path.home() / '.qcc' / 'failure_queue.json'
+
+        if not queue_file.exists():
+            print_status("失败队列已经为空", "info")
+            return
+
+        with open(queue_file, 'r') as f:
+            data = json.load(f)
+
+        queue_items = data.get('queue', [])
+
+        if not queue_items:
+            print_status("失败队列已经为空", "info")
+            return
+
+        print(f"当前队列中有 {len(queue_items)} 个请求")
+
+        if not confirm_action("确认清空失败队列？此操作不可恢复", default=False):
+            print_status("操作取消", "info")
+            return
+
+        # 清空队列
+        data['queue'] = []
+        data['stats']['queue_size'] = 0
+        data['updated_at'] = datetime.now().isoformat()
+
+        with open(queue_file, 'w') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        print_status("失败队列已清空", "success")
+
+    except KeyboardInterrupt:
+        print_status("\n操作取消", "warning")
+    except Exception as e:
+        print_status(f"清空队列失败: {e}", "error")
 
 
 def main():
