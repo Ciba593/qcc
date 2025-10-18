@@ -8,3 +8,4 @@
 - 发布版本时 docs\releases
 - 需求到开发到测试阶段对阶段功能整个生命周期的记录时 docs\tasks 
 - 需求到开发相关文档要求参看 docs/tasks/README.md
+- 不要将其他文档放到根目录

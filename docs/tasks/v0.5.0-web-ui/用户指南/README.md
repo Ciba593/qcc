@@ -8,27 +8,31 @@
 
 ## 🚀 快速开始
 
-### 安装
+### 一键启动（推荐）
 
 ```bash
-# 使用安装脚本（推荐）
-./setup-web.sh
+# 生产模式 - 日常使用
+uvx qcc web start
 
-# 或手动安装
-pip install -e '.[web]'
+# 开发模式 - 代码开发（前后端热重载）
+uvx qcc web start --dev
 ```
 
-### 启动
+### 本地开发
 
 ```bash
-# 启动 Web UI
-qcc web start
+# 克隆项目
+git clone https://github.com/lghguge520/qcc.git
+cd qcc
 
-# 指定端口
-qcc web start --port 8080
+# 使用 uvx 运行本地版本
+uvx --from . qcc web start --dev
 
-# 开发模式（自动重载）
-qcc web start --dev
+# 查看状态
+uvx --from . qcc web status
+
+# 停止服务
+uvx --from . qcc web stop
 ```
 
 ### 访问

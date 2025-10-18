@@ -191,6 +191,27 @@ uvx qcc remove old                  # 🗑️  删除配置
 uvx qcc uninstall                   # 🧹 清理本地数据（保留云端）
 ```
 
+### 🖥️ Web UI 管理界面 (v0.5.0 新增)
+
+```bash
+# 生产模式（推荐日常使用）
+uvx qcc web start                       # 启动 Web UI
+uvx qcc web status                      # 查看状态
+uvx qcc web stop                        # 停止（自动清理代理和配置）
+
+# 开发模式（推荐代码开发）
+uvx qcc web start --dev                 # 前后端热重载
+uvx qcc web stop --keep-proxy          # 保持代理运行
+uvx qcc web stop --keep-config         # 保持配置不还原
+```
+
+**特性：**
+- 🎨 现代化 React + TypeScript 界面
+- ⚡ 一键启动，自动构建
+- 🔥 开发模式支持前后端热重载
+- 🧹 停止时自动清理（代理 + 配置）
+- 📊 实时监控和管理
+
 ### 🌐 代理服务命令 (v0.4.0 新增)
 
 <table>
@@ -463,6 +484,18 @@ python -m twine upload dist/*
 ### 命令参考手册
 
 - **[📖 CLI 命令参考](docs/CLI_REFERENCE.md)** - 所有可用命令的完整参考（基于当前实现）
+
+### v0.5.0 Web UI 文档
+
+想了解更多关于 v0.5.0 Web UI 的详细信息？查看完整文档：
+
+- **[🚀 快速开始](docs/tasks/web-ui/快速开始.md)** - Web UI 安装和使用指南
+- **[⚡ 一键启动](docs/tasks/web-ui-one-command-start.md)** - 开发模式和生产模式详解
+- **[🧹 自动清理](docs/tasks/web-ui-stop-cleanup.md)** - 停止时的自动清理功能
+- **[🔧 开发模式](docs/tasks/web-ui-dev-mode.md)** - 前后端热重载测试文档
+
+**快速参考**:
+- [📝 快速参考卡片](WEB_START_QUICK_REFERENCE.md) - 常用命令速查
 
 ### v0.4.0 代理服务文档
 

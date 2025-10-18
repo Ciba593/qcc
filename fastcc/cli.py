@@ -2911,13 +2911,79 @@ def stop_running_web_server():
         return False
 
     pid = server_info['pid']
+    vite_pid = server_info.get('vite_pid')
 
     try:
-        # 发送 SIGTERM 信号
+        # 如果是开发模式，先停止前端进程
+        if vite_pid:
+            try:
+                os.kill(vite_pid, signal.SIGTERM)
+            except OSError:
+                pass  # 前端进程可能已停止
+
+        # 发送 SIGTERM 信号停止后端
         os.kill(pid, signal.SIGTERM)
         return True
     except OSError:
         return False
+
+
+def cleanup_on_stop(keep_proxy=False, keep_config=False):
+    """Web UI 停止时的清理函数
+
+    Args:
+        keep_proxy: 是否保持代理服务运行
+        keep_config: 是否保持 Claude Code 配置
+    """
+    import time
+
+    # 停止代理服务
+    if not keep_proxy:
+        try:
+            from .proxy.server import ProxyServer
+
+            proxy_info = ProxyServer.get_running_server()
+            if proxy_info:
+                print_status("检测到代理服务正在运行，正在停止...", "info")
+                if ProxyServer.stop_running_server():
+                    time.sleep(1)
+                    if not ProxyServer.get_running_server():
+                        print_status("代理服务已停止", "success")
+                    else:
+                        print_status("代理服务可能未完全停止", "warning")
+                else:
+                    print_status("停止代理服务失败", "warning")
+            else:
+                print_status("代理服务未运行，无需停止", "info")
+        except Exception as e:
+            print_status(f"停止代理服务时出错: {e}", "warning")
+
+        print()
+
+    # 还原 Claude Code 配置
+    if not keep_config:
+        try:
+            from .web.routers.claude_config import claude_config_manager
+
+            if claude_config_manager.is_proxy_applied():
+                print_status("检测到已应用代理配置，正在还原...", "info")
+                try:
+                    claude_config_manager.restore_config()
+                    print_status("Claude Code 配置已还原", "success")
+                except Exception as e:
+                    print_status(f"还原 Claude Code 配置失败: {e}", "warning")
+            else:
+                print_status("未应用代理配置，无需还原", "info")
+        except Exception as e:
+            print_status(f"还原配置时出错: {e}", "warning")
+
+        print()
+
+    # 显示提示
+    if keep_proxy:
+        safe_print("💡 提示: 代理服务仍在运行，使用 'uvx qcc proxy stop' 停止")
+    if keep_config:
+        safe_print("💡 提示: Claude Code 配置未还原，请手动还原或在 Web UI 中还原")
 
 
 @cli.group()
@@ -2932,17 +2998,25 @@ def web():
 @click.option('--dev', is_flag=True, help='开发模式(启用热重载)')
 @click.option('--no-browser', is_flag=True, help='不自动打开浏览器')
 def start(host, port, dev, no_browser):
-    """启动 Web UI 服务"""
+    """启动 Web UI 服务
+
+    生产模式: uvx qcc web start
+      - 构建前端并通过后端单一端口提供服务
+      - 访问地址: http://127.0.0.1:8080
+
+    开发模式: uvx qcc web start --dev
+      - 前端热重载: http://127.0.0.1:5173
+      - 后端热重载: http://127.0.0.1:8080
+      - 自动代理 API 请求
+    """
     try:
         import os
         import json
         from datetime import datetime
+        import signal
+        import atexit
 
         print_header("QCC Web UI")
-        print(f"启动 Web 服务...")
-        print(f"监听地址: http://{host}:{port}")
-        print(f"API 文档: http://{host}:{port}/api/docs")
-        print_separator()
 
         # 检查是否已经有Web服务在运行
         existing_server = get_running_web_server()
@@ -2951,44 +3025,108 @@ def start(host, port, dev, no_browser):
             safe_print("💡 如需重启，请先运行: uvx qcc web stop")
             return
 
-        # 检查端口是否被占用
+        # 检查后端端口是否被占用
         import socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         result = sock.connect_ex((host, port))
         sock.close()
 
         if result == 0:
-            print_status(f"端口 {port} 已被占用，请使用其他端口", "error")
+            print_status(f"后端端口 {port} 已被占用，请使用其他端口", "error")
             return
 
-        # 写入PID文件
-        pid_file = Path.home() / '.qcc' / 'web.pid'
-        pid_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(pid_file, 'w') as f:
-            data = {
-                'pid': os.getpid(),
-                'host': host,
-                'port': port,
-                'start_time': datetime.now().isoformat()
-            }
-            json.dump(data, f)
+        if dev:
+            # 开发模式：前后端同时启动
+            print_status("启动开发模式（前后端热重载）", "info")
+            print_separator()
 
-        # 自动打开浏览器
-        if not no_browser:
-            import webbrowser
-            import threading
-            def open_browser():
-                import time
-                time.sleep(1.5)  # 等待服务器启动
-                webbrowser.open(f'http://{host}:{port}')
-            threading.Thread(target=open_browser, daemon=True).start()
+            # 查找前端目录
+            # 尝试多个可能的位置
+            possible_locations = [
+                Path(__file__).parent.parent / 'qcc-web',  # 从 fastcc/cli.py 向上两级
+                Path.cwd() / 'qcc-web',  # 当前工作目录
+                Path(__file__).resolve().parent.parent / 'qcc-web',  # 解析符号链接后的路径
+            ]
 
-        # 启动服务器
-        import uvicorn
-        from fastcc.web.app import app
+            web_dir = None
+            for location in possible_locations:
+                if location.exists() and (location / 'package.json').exists():
+                    web_dir = location
+                    break
 
-        try:
-            if dev:
+            if not web_dir:
+                print_status("前端目录不存在，请确认项目结构", "error")
+                print(f"已尝试查找位置:")
+                for loc in possible_locations:
+                    print(f"  - {loc}")
+                print(f"\n当前工作目录: {Path.cwd()}")
+                print(f"CLI 文件位置: {Path(__file__).parent}")
+                return
+
+            # 检查 node_modules
+            if not (web_dir / 'node_modules').exists():
+                print_status("正在安装前端依赖...", "info")
+                result = subprocess.run(
+                    ['npm', 'install'],
+                    cwd=str(web_dir),
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print_status(f"安装依赖失败: {result.stderr}", "error")
+                    return
+                print_status("依赖安装完成", "success")
+
+            # 启动前端开发服务器
+            print_status("启动前端开发服务器 (Vite)", "info")
+            vite_process = subprocess.Popen(
+                ['npm', 'run', 'dev'],
+                cwd=str(web_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+
+            # 写入PID文件（包含前端进程）
+            pid_file = Path.home() / '.qcc' / 'web.pid'
+            pid_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(pid_file, 'w') as f:
+                data = {
+                    'pid': os.getpid(),
+                    'vite_pid': vite_process.pid,
+                    'host': host,
+                    'port': port,
+                    'dev_mode': True,
+                    'start_time': datetime.now().isoformat()
+                }
+                json.dump(data, f)
+
+            # 确保清理子进程
+            def cleanup():
+                if vite_process.poll() is None:
+                    vite_process.terminate()
+                    try:
+                        vite_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        vite_process.kill()
+                if pid_file.exists():
+                    pid_file.unlink()
+
+            atexit.register(cleanup)
+            signal.signal(signal.SIGTERM, lambda s, f: cleanup())
+
+            # 启动后端（热重载）
+            print_status("启动后端 API 服务器 (FastAPI + Uvicorn)", "info")
+            print(f"后端 API: http://{host}:{port}")
+            print(f"前端开发: http://{host}:5173")
+            print(f"API 文档: http://{host}:{port}/api/docs")
+            print_separator()
+            safe_print("💡 按 Ctrl+C 停止服务")
+            print()
+
+            import uvicorn
+            try:
                 uvicorn.run(
                     "fastcc.web.app:app",
                     host=host,
@@ -2996,20 +3134,120 @@ def start(host, port, dev, no_browser):
                     reload=True,
                     log_level="debug"
                 )
-            else:
+            finally:
+                cleanup()
+
+        else:
+            # 生产模式：先构建前端，再启动后端
+            print_status("启动生产模式", "info")
+            print_separator()
+
+            # 查找前端目录
+            # 尝试多个可能的位置
+            possible_locations = [
+                Path(__file__).parent.parent / 'qcc-web',  # 从 fastcc/cli.py 向上两级
+                Path.cwd() / 'qcc-web',  # 当前工作目录
+                Path(__file__).resolve().parent.parent / 'qcc-web',  # 解析符号链接后的路径
+            ]
+
+            web_dir = None
+            for location in possible_locations:
+                if location.exists() and (location / 'package.json').exists():
+                    web_dir = location
+                    break
+
+            if not web_dir:
+                print_status("前端目录不存在，请确认项目结构", "error")
+                print(f"已尝试查找位置:")
+                for loc in possible_locations:
+                    print(f"  - {loc}")
+                print(f"\n当前工作目录: {Path.cwd()}")
+                print(f"CLI 文件位置: {Path(__file__).parent}")
+                return
+
+            dist_dir = web_dir / 'dist'
+
+            # 检查是否需要构建前端
+            if not dist_dir.exists() or not (dist_dir / 'index.html').exists():
+                print_status("检测到前端未构建，开始构建...", "info")
+
+                # 检查 node_modules
+                if not (web_dir / 'node_modules').exists():
+                    print_status("正在安装前端依赖...", "info")
+                    result = subprocess.run(
+                        ['npm', 'install'],
+                        cwd=str(web_dir),
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        print_status(f"安装依赖失败: {result.stderr}", "error")
+                        return
+
+                # 构建前端
+                result = subprocess.run(
+                    ['npm', 'run', 'build'],
+                    cwd=str(web_dir),
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print_status(f"构建前端失败: {result.stderr}", "error")
+                    return
+                print_status("前端构建完成", "success")
+
+            print(f"启动 Web 服务...")
+            print(f"访问地址: http://{host}:{port}")
+            print(f"API 文档: http://{host}:{port}/api/docs")
+            print_separator()
+
+            # 写入PID文件
+            pid_file = Path.home() / '.qcc' / 'web.pid'
+            pid_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(pid_file, 'w') as f:
+                data = {
+                    'pid': os.getpid(),
+                    'host': host,
+                    'port': port,
+                    'dev_mode': False,
+                    'start_time': datetime.now().isoformat()
+                }
+                json.dump(data, f)
+
+            # 自动打开浏览器
+            if not no_browser:
+                import webbrowser
+                import threading
+                def open_browser():
+                    import time
+                    time.sleep(1.5)
+                    webbrowser.open(f'http://{host}:{port}')
+                threading.Thread(target=open_browser, daemon=True).start()
+
+            # 启动服务器
+            import uvicorn
+            from fastcc.web.app import app
+
+            try:
                 uvicorn.run(
                     app,
                     host=host,
                     port=port,
                     log_level="info"
                 )
-        finally:
-            # 清理PID文件
-            if pid_file.exists():
-                pid_file.unlink()
+            finally:
+                # 清理PID文件
+                if pid_file.exists():
+                    pid_file.unlink()
 
     except KeyboardInterrupt:
-        print_status("\n服务已停止", "info")
+        print()
+        print_status("服务已停止", "info")
+        print()
+
+        # Ctrl+C 停止时也执行清理
+        cleanup_on_stop()
+
     except Exception as e:
         print_status(f"启动失败: {e}", "error")
         import traceback
@@ -3022,8 +3260,18 @@ def start(host, port, dev, no_browser):
 
 
 @web.command()
-def stop():
-    """停止 Web UI 服务"""
+@click.option('--keep-proxy', is_flag=True, help='保持代理服务运行')
+@click.option('--keep-config', is_flag=True, help='保持 Claude Code 配置')
+def stop(keep_proxy, keep_config):
+    """停止 Web UI 服务
+
+    默认会自动：
+    - 停止代理服务（如果在运行）
+    - 还原 Claude Code 配置（如果已应用）
+
+    使用 --keep-proxy 可以保持代理运行
+    使用 --keep-config 可以保持配置不还原
+    """
     try:
         import time
 
@@ -3041,6 +3289,7 @@ def stop():
 
         print(f"正在停止 Web UI (PID: {pid}, {host}:{port})...")
 
+        # 停止 Web UI 服务
         if stop_running_web_server():
             # 等待进程停止
             time.sleep(1)
@@ -3050,8 +3299,15 @@ def stop():
                 print_status("Web UI 已停止", "success")
             else:
                 print_status("Web UI 可能未完全停止，请检查进程状态", "warning")
+                return
         else:
             print_status("停止 Web UI 失败", "error")
+            return
+
+        print()
+
+        # 执行清理操作
+        cleanup_on_stop(keep_proxy=keep_proxy, keep_config=keep_config)
 
     except Exception as e:
         print_status(f"停止失败: {e}", "error")
@@ -3072,6 +3328,7 @@ def status():
         if not server_info:
             print_status("Web UI 未运行", "info")
             safe_print("💡 启动服务: uvx qcc web start")
+            safe_print("💡 开发模式: uvx qcc web start --dev")
             return
 
         # 显示服务器信息
@@ -3079,6 +3336,8 @@ def status():
         host = server_info['host']
         port = server_info['port']
         start_time = server_info['start_time']
+        dev_mode = server_info.get('dev_mode', False)
+        vite_pid = server_info.get('vite_pid')
 
         # 计算运行时间
         start_dt = datetime.fromisoformat(start_time)
@@ -3090,8 +3349,17 @@ def status():
         print_status("Web UI 正在运行", "success")
         print()
         safe_print(f"📊 服务器信息:")
-        print(f"  进程 ID: {pid}")
-        print(f"  监听地址: http://{host}:{port}")
+        print(f"  运行模式: {'开发模式 (热重载)' if dev_mode else '生产模式'}")
+        print(f"  后端进程 ID: {pid}")
+        if vite_pid:
+            print(f"  前端进程 ID: {vite_pid}")
+
+        if dev_mode:
+            print(f"  前端地址: http://{host}:5173")
+            print(f"  后端 API: http://{host}:{port}")
+        else:
+            print(f"  访问地址: http://{host}:{port}")
+
         print(f"  API 文档: http://{host}:{port}/api/docs")
         print(f"  启动时间: {start_time[:19].replace('T', ' ')}")
         print(f"  运行时长: {hours}小时 {minutes}分钟 {seconds}秒")
