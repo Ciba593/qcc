@@ -994,11 +994,12 @@ def proxy_start(host, port, cluster):
         print_header("QCC 代理服务器")
 
         # 配置日志系统
-        log_file = Path.home() / '.qcc' / 'proxy.log'
+        log_file = Path.home() / '.fastcc' / 'proxy.log'
         log_file.parent.mkdir(exist_ok=True)
 
+        # 设置日志级别为 DEBUG 以便调试
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.DEBUG,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
                 logging.FileHandler(log_file, encoding='utf-8'),
@@ -1007,6 +1008,7 @@ def proxy_start(host, port, cluster):
         )
         logger = logging.getLogger(__name__)
         logger.info("代理服务器日志系统已初始化")
+        print_status(f"日志文件: {log_file}", "success")
 
         # 初始化配置管理器
         config_manager = ConfigManager()
@@ -1017,26 +1019,115 @@ def proxy_start(host, port, cluster):
 
         # 如果指定了集群配置，则加载该集群的 endpoints
         if cluster:
-            cluster_profile = config_manager.get_profile(cluster)
-            if not cluster_profile:
-                print_status(f"集群配置 '{cluster}' 不存在", "error")
-                safe_print("💡 使用 'uvx qcc endpoint add' 创建集群配置")
-                return
+            # 先尝试作为 EndpointGroup
+            from fastcc.core.endpoint_group_manager import EndpointGroupManager
+            group_manager = EndpointGroupManager(config_manager)
+            endpoint_group = group_manager.get_group(cluster)
 
-            if not hasattr(cluster_profile, 'endpoints') or not cluster_profile.endpoints:
-                print_status(f"集群配置 '{cluster}' 没有 endpoints", "error")
-                safe_print("💡 使用 'uvx qcc endpoint add' 添加 endpoints")
-                return
+            if endpoint_group:
+                # 使用 EndpointGroup 创建集群配置
+                print_status(f"使用 EndpointGroup: {cluster}", "success")
 
-            print_status(f"使用集群配置: {cluster}", "success")
-            print(f"加载 {len(cluster_profile.endpoints)} 个 endpoint")
-            print()
+                # 收集所有 endpoints
+                all_endpoints = []
 
-            # 显示 endpoints 列表
-            for i, ep in enumerate(cluster_profile.endpoints, 1):
-                priority_label = "主节点" if ep.priority == 1 else "副节点" if ep.priority == 2 else "其他"
-                print(f"  {i}. [{priority_label}] {ep.base_url}")
-            print()
+                # 添加主节点
+                for config_name in endpoint_group.primary_configs:
+                    profile = config_manager.get_profile(config_name)
+                    if profile:
+                        if hasattr(profile, 'endpoints') and profile.endpoints:
+                            # 如果是集群配置,添加所有 endpoints
+                            for ep in profile.endpoints:
+                                ep.priority = 1  # 主节点
+                                all_endpoints.append(ep)
+                        else:
+                            # 如果是普通配置,转换为 endpoint
+                            from fastcc.core.endpoint import Endpoint
+                            ep = Endpoint(
+                                base_url=profile.base_url,
+                                api_key=profile.api_key,
+                                priority=1,
+                                source_profile=config_name
+                            )
+                            all_endpoints.append(ep)
+
+                # 添加副节点
+                for config_name in endpoint_group.secondary_configs:
+                    profile = config_manager.get_profile(config_name)
+                    if profile:
+                        if hasattr(profile, 'endpoints') and profile.endpoints:
+                            # 如果是集群配置,添加所有 endpoints
+                            for ep in profile.endpoints:
+                                ep.priority = 2  # 副节点
+                                all_endpoints.append(ep)
+                        else:
+                            # 如果是普通配置,转换为 endpoint
+                            from fastcc.core.endpoint import Endpoint
+                            ep = Endpoint(
+                                base_url=profile.base_url,
+                                api_key=profile.api_key,
+                                priority=2,
+                                source_profile=config_name
+                            )
+                            all_endpoints.append(ep)
+
+                if not all_endpoints:
+                    print_status(f"EndpointGroup '{cluster}' 没有可用的 endpoints", "error")
+                    return
+
+                # 创建临时的集群配置
+                from fastcc.core.config import ConfigProfile
+                cluster_profile = ConfigProfile(
+                    name=cluster,
+                    description=endpoint_group.description,
+                    base_url=all_endpoints[0].base_url,
+                    api_key=all_endpoints[0].api_key,
+                    endpoints=all_endpoints
+                )
+
+                # 将临时配置添加到 config_manager 中，以便 ProxyServer 可以访问
+                config_manager.profiles[cluster] = cluster_profile
+                logger.info(f"临时集群配置 '{cluster}' 已注册到 config_manager")
+
+                print(f"加载 {len(all_endpoints)} 个 endpoint")
+                print()
+
+                # 显示 endpoints 列表
+                for i, ep in enumerate(all_endpoints, 1):
+                    priority_label = "主节点" if ep.priority == 1 else "副节点" if ep.priority == 2 else "其他"
+                    print(f"  {i}. [{priority_label}] {ep.id[:8]} - {ep.base_url}")
+                print()
+
+                logger.info(f"EndpointGroup '{cluster}' 加载完成:")
+                logger.info(f"  - 主节点配置: {endpoint_group.primary_configs}")
+                logger.info(f"  - 副节点配置: {endpoint_group.secondary_configs}")
+                logger.info(f"  - 总 endpoints: {len(all_endpoints)}")
+
+            else:
+                # 尝试作为普通配置
+                cluster_profile = config_manager.get_profile(cluster)
+                if not cluster_profile:
+                    print_status(f"集群配置 '{cluster}' 不存在", "error")
+                    safe_print("💡 使用 'uvx qcc endpoint add' 创建集群配置")
+                    return
+
+                if not hasattr(cluster_profile, 'endpoints') or not cluster_profile.endpoints:
+                    print_status(f"集群配置 '{cluster}' 没有 endpoints", "error")
+                    safe_print("💡 使用 'uvx qcc endpoint add' 添加 endpoints")
+                    return
+
+                print_status(f"使用集群配置: {cluster}", "success")
+                print(f"加载 {len(cluster_profile.endpoints)} 个 endpoint")
+                print()
+
+                # 显示 endpoints 列表
+                for i, ep in enumerate(cluster_profile.endpoints, 1):
+                    priority_label = "主节点" if ep.priority == 1 else "副节点" if ep.priority == 2 else "其他"
+                    print(f"  {i}. [{priority_label}] {ep.id[:8]} - {ep.base_url}")
+                print()
+
+                logger.info(f"集群配置 '{cluster}' 加载完成:")
+                logger.info(f"  - 总 endpoints: {len(cluster_profile.endpoints)}")
         else:
             # 检查是否有配置
             profiles = config_manager.list_profiles()
@@ -1194,6 +1285,97 @@ def proxy_stop():
         traceback.print_exc()
 
 
+@proxy.command('logs')
+@click.option('--follow', '-f', is_flag=True, help='实时跟踪日志（类似 tail -f）')
+@click.option('--lines', '-n', default=50, help='显示最后 N 行日志（默认 50）')
+@click.option('--level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'ALL']), default='ALL', help='过滤日志级别')
+@click.option('--grep', help='搜索关键词')
+def proxy_logs(follow, lines, level, grep):
+    """查看代理服务器日志"""
+    try:
+        from pathlib import Path
+        import time
+        import re
+
+        log_file = Path.home() / '.fastcc' / 'proxy.log'
+
+        if not log_file.exists():
+            print_status("日志文件不存在", "warning")
+            safe_print(f"日志文件路径: {log_file}")
+            safe_print("请先启动代理服务器: uvx qcc proxy start")
+            return
+
+        print_header("代理服务器日志")
+        safe_print(f"日志文件: {log_file}")
+        safe_print(f"显示行数: {lines if not follow else '实时跟踪'}")
+        if level != 'ALL':
+            safe_print(f"过滤级别: {level}")
+        if grep:
+            safe_print(f"搜索关键词: {grep}")
+        print()
+
+        def filter_line(line):
+            """过滤日志行"""
+            if not line.strip():
+                return False
+
+            # 级别过滤
+            if level != 'ALL':
+                if f" - {level} - " not in line:
+                    return False
+
+            # 关键词过滤
+            if grep:
+                if grep.lower() not in line.lower():
+                    return False
+
+            return True
+
+        if follow:
+            # 实时跟踪模式
+            safe_print("开始实时跟踪日志（按 Ctrl+C 退出）...\n")
+
+            with open(log_file, 'r', encoding='utf-8') as f:
+                # 先跳到文件末尾
+                f.seek(0, 2)
+
+                try:
+                    while True:
+                        line = f.readline()
+                        if line:
+                            if filter_line(line):
+                                print(line.rstrip())
+                        else:
+                            time.sleep(0.1)
+                except KeyboardInterrupt:
+                    print("\n")
+                    print_status("停止跟踪日志", "info")
+        else:
+            # 显示最后 N 行
+            with open(log_file, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+
+            # 过滤并显示
+            filtered_lines = [line for line in all_lines if filter_line(line)]
+
+            # 显示最后 N 行
+            display_lines = filtered_lines[-lines:] if len(filtered_lines) > lines else filtered_lines
+
+            for line in display_lines:
+                print(line.rstrip())
+
+            print()
+            print_status(f"共显示 {len(display_lines)} 行日志", "info")
+            safe_print("💡 使用 'uvx qcc proxy logs -f' 实时跟踪日志")
+            safe_print("💡 使用 'uvx qcc proxy logs --level ERROR' 只看错误日志")
+            safe_print("💡 使用 'uvx qcc proxy logs --grep endpoint' 搜索关键词")
+
+    except Exception as e:
+        print_status(f"查看日志失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
 @proxy.command('use')
 @click.argument('cluster_name')
 @click.option('--host', default='127.0.0.1', help='代理服务器地址')
@@ -1309,7 +1491,7 @@ def proxy_logs(lines, follow):
 
         print_header("QCC 代理服务器日志")
 
-        log_file = Path.home() / '.qcc' / 'proxy.log'
+        log_file = Path.home() / '.fastcc' / 'proxy.log'
 
         if not log_file.exists():
             print_status("日志文件不存在", "warning")
@@ -1848,7 +2030,7 @@ def _start_cluster_and_claude(cluster_name: str, host: str, port: int, config_ma
             ]
 
             # 后台启动
-            log_file = Path.home() / '.qcc' / 'proxy.log'
+            log_file = Path.home() / '.fastcc' / 'proxy.log'
             log_file.parent.mkdir(exist_ok=True)
 
             with open(log_file, 'a') as log:
@@ -2674,6 +2856,520 @@ def queue_clear():
         print_status("\n操作取消", "warning")
     except Exception as e:
         print_status(f"清空队列失败: {e}", "error")
+
+
+# ==================== Web UI 命令 ====================
+
+# ========== Web UI 辅助函数 ==========
+def get_running_web_server():
+    """获取正在运行的Web服务器信息
+
+    Returns:
+        服务器信息字典，如果没有运行则返回 None
+    """
+    import os
+    import json
+
+    pid_file = Path.home() / '.qcc' / 'web.pid'
+
+    if not pid_file.exists():
+        return None
+
+    try:
+        with open(pid_file, 'r') as f:
+            data = json.load(f)
+
+        pid = data.get('pid')
+        if not pid:
+            return None
+
+        # 检查进程是否存在
+        try:
+            os.kill(pid, 0)  # 发送信号 0 只检查进程是否存在
+            return data
+        except OSError:
+            # 进程不存在，清理 PID 文件
+            pid_file.unlink()
+            return None
+
+    except Exception:
+        return None
+
+
+def stop_running_web_server():
+    """停止正在运行的Web服务器
+
+    Returns:
+        是否成功停止
+    """
+    import os
+    import signal
+
+    server_info = get_running_web_server()
+
+    if not server_info:
+        return False
+
+    pid = server_info['pid']
+    vite_pid = server_info.get('vite_pid')
+
+    try:
+        # 如果是开发模式，先停止前端进程
+        if vite_pid:
+            try:
+                os.kill(vite_pid, signal.SIGTERM)
+            except OSError:
+                pass  # 前端进程可能已停止
+
+        # 发送 SIGTERM 信号停止后端
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError:
+        return False
+
+
+def cleanup_on_stop(keep_proxy=False, keep_config=False):
+    """Web UI 停止时的清理函数
+
+    Args:
+        keep_proxy: 是否保持代理服务运行
+        keep_config: 是否保持 Claude Code 配置
+    """
+    import time
+
+    # 停止代理服务
+    if not keep_proxy:
+        try:
+            from .proxy.server import ProxyServer
+
+            proxy_info = ProxyServer.get_running_server()
+            if proxy_info:
+                print_status("检测到代理服务正在运行，正在停止...", "info")
+                if ProxyServer.stop_running_server():
+                    time.sleep(1)
+                    if not ProxyServer.get_running_server():
+                        print_status("代理服务已停止", "success")
+                    else:
+                        print_status("代理服务可能未完全停止", "warning")
+                else:
+                    print_status("停止代理服务失败", "warning")
+            else:
+                print_status("代理服务未运行，无需停止", "info")
+        except Exception as e:
+            print_status(f"停止代理服务时出错: {e}", "warning")
+
+        print()
+
+    # 还原 Claude Code 配置
+    if not keep_config:
+        try:
+            from .web.routers.claude_config import claude_config_manager
+
+            if claude_config_manager.is_proxy_applied():
+                print_status("检测到已应用代理配置，正在还原...", "info")
+                try:
+                    claude_config_manager.restore_config()
+                    print_status("Claude Code 配置已还原", "success")
+                except Exception as e:
+                    print_status(f"还原 Claude Code 配置失败: {e}", "warning")
+            else:
+                print_status("未应用代理配置，无需还原", "info")
+        except Exception as e:
+            print_status(f"还原配置时出错: {e}", "warning")
+
+        print()
+
+    # 显示提示
+    if keep_proxy:
+        safe_print("💡 提示: 代理服务仍在运行，使用 'uvx qcc proxy stop' 停止")
+    if keep_config:
+        safe_print("💡 提示: Claude Code 配置未还原，请手动还原或在 Web UI 中还原")
+
+
+@cli.group()
+def web():
+    """Web UI 管理命令"""
+    pass
+
+
+@web.command()
+@click.option('--host', default='127.0.0.1', help='监听地址')
+@click.option('--port', default=8080, type=int, help='监听端口')
+@click.option('--dev', is_flag=True, help='开发模式(启用热重载)')
+@click.option('--no-browser', is_flag=True, help='不自动打开浏览器')
+def start(host, port, dev, no_browser):
+    """启动 Web UI 服务
+
+    生产模式: uvx qcc web start
+      - 构建前端并通过后端单一端口提供服务
+      - 访问地址: http://127.0.0.1:8080
+
+    开发模式: uvx qcc web start --dev
+      - 前端热重载: http://127.0.0.1:5173
+      - 后端热重载: http://127.0.0.1:8080
+      - 自动代理 API 请求
+    """
+    try:
+        import os
+        import json
+        from datetime import datetime
+        import signal
+        import atexit
+
+        print_header("QCC Web UI")
+
+        # 检查是否已经有Web服务在运行
+        existing_server = get_running_web_server()
+        if existing_server:
+            print_status(f"Web UI 已在运行: http://{existing_server['host']}:{existing_server['port']}", "warning")
+            safe_print("💡 如需重启，请先运行: uvx qcc web stop")
+            return
+
+        # 检查后端端口是否被占用
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex((host, port))
+        sock.close()
+
+        if result == 0:
+            print_status(f"后端端口 {port} 已被占用，请使用其他端口", "error")
+            return
+
+        if dev:
+            # 开发模式：前后端同时启动
+            print_status("启动开发模式（前后端热重载）", "info")
+            print_separator()
+
+            # 查找前端目录
+            # 尝试多个可能的位置
+            possible_locations = [
+                Path(__file__).parent.parent / 'qcc-web',  # 从 fastcc/cli.py 向上两级
+                Path.cwd() / 'qcc-web',  # 当前工作目录
+                Path(__file__).resolve().parent.parent / 'qcc-web',  # 解析符号链接后的路径
+            ]
+
+            web_dir = None
+            for location in possible_locations:
+                if location.exists() and (location / 'package.json').exists():
+                    web_dir = location
+                    break
+
+            if not web_dir:
+                print_status("前端目录不存在，请确认项目结构", "error")
+                print(f"已尝试查找位置:")
+                for loc in possible_locations:
+                    print(f"  - {loc}")
+                print(f"\n当前工作目录: {Path.cwd()}")
+                print(f"CLI 文件位置: {Path(__file__).parent}")
+                return
+
+            # 检查 node_modules
+            if not (web_dir / 'node_modules').exists():
+                print_status("正在安装前端依赖...", "info")
+                result = subprocess.run(
+                    ['npm', 'install'],
+                    cwd=str(web_dir),
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print_status(f"安装依赖失败: {result.stderr}", "error")
+                    return
+                print_status("依赖安装完成", "success")
+
+            # 启动前端开发服务器
+            print_status("启动前端开发服务器 (Vite)", "info")
+            vite_process = subprocess.Popen(
+                ['npm', 'run', 'dev'],
+                cwd=str(web_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+
+            # 写入PID文件（包含前端进程）
+            pid_file = Path.home() / '.qcc' / 'web.pid'
+            pid_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(pid_file, 'w') as f:
+                data = {
+                    'pid': os.getpid(),
+                    'vite_pid': vite_process.pid,
+                    'host': host,
+                    'port': port,
+                    'dev_mode': True,
+                    'start_time': datetime.now().isoformat()
+                }
+                json.dump(data, f)
+
+            # 确保清理子进程
+            def cleanup():
+                if vite_process.poll() is None:
+                    vite_process.terminate()
+                    try:
+                        vite_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        vite_process.kill()
+                if pid_file.exists():
+                    pid_file.unlink()
+
+            atexit.register(cleanup)
+            signal.signal(signal.SIGTERM, lambda s, f: cleanup())
+
+            # 启动后端（热重载）
+            print_status("启动后端 API 服务器 (FastAPI + Uvicorn)", "info")
+            print(f"后端 API: http://{host}:{port}")
+            print(f"前端开发: http://{host}:5173")
+            print(f"API 文档: http://{host}:{port}/api/docs")
+            print_separator()
+            safe_print("💡 按 Ctrl+C 停止服务")
+            print()
+
+            import uvicorn
+            try:
+                uvicorn.run(
+                    "fastcc.web.app:app",
+                    host=host,
+                    port=port,
+                    reload=True,
+                    log_level="debug"
+                )
+            finally:
+                cleanup()
+
+        else:
+            # 生产模式：先构建前端，再启动后端
+            print_status("启动生产模式", "info")
+            print_separator()
+
+            # 查找前端目录
+            # 尝试多个可能的位置
+            possible_locations = [
+                Path(__file__).parent.parent / 'qcc-web',  # 从 fastcc/cli.py 向上两级
+                Path.cwd() / 'qcc-web',  # 当前工作目录
+                Path(__file__).resolve().parent.parent / 'qcc-web',  # 解析符号链接后的路径
+            ]
+
+            web_dir = None
+            for location in possible_locations:
+                if location.exists() and (location / 'package.json').exists():
+                    web_dir = location
+                    break
+
+            if not web_dir:
+                print_status("前端目录不存在，请确认项目结构", "error")
+                print(f"已尝试查找位置:")
+                for loc in possible_locations:
+                    print(f"  - {loc}")
+                print(f"\n当前工作目录: {Path.cwd()}")
+                print(f"CLI 文件位置: {Path(__file__).parent}")
+                return
+
+            dist_dir = web_dir / 'dist'
+
+            # 检查是否需要构建前端
+            if not dist_dir.exists() or not (dist_dir / 'index.html').exists():
+                print_status("检测到前端未构建，开始构建...", "info")
+
+                # 检查 node_modules
+                if not (web_dir / 'node_modules').exists():
+                    print_status("正在安装前端依赖...", "info")
+                    result = subprocess.run(
+                        ['npm', 'install'],
+                        cwd=str(web_dir),
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        print_status(f"安装依赖失败: {result.stderr}", "error")
+                        return
+
+                # 构建前端
+                result = subprocess.run(
+                    ['npm', 'run', 'build'],
+                    cwd=str(web_dir),
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print_status(f"构建前端失败: {result.stderr}", "error")
+                    return
+                print_status("前端构建完成", "success")
+
+            print(f"启动 Web 服务...")
+            print(f"访问地址: http://{host}:{port}")
+            print(f"API 文档: http://{host}:{port}/api/docs")
+            print_separator()
+
+            # 写入PID文件
+            pid_file = Path.home() / '.qcc' / 'web.pid'
+            pid_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(pid_file, 'w') as f:
+                data = {
+                    'pid': os.getpid(),
+                    'host': host,
+                    'port': port,
+                    'dev_mode': False,
+                    'start_time': datetime.now().isoformat()
+                }
+                json.dump(data, f)
+
+            # 自动打开浏览器
+            if not no_browser:
+                import webbrowser
+                import threading
+                def open_browser():
+                    import time
+                    time.sleep(1.5)
+                    webbrowser.open(f'http://{host}:{port}')
+                threading.Thread(target=open_browser, daemon=True).start()
+
+            # 启动服务器
+            import uvicorn
+            from fastcc.web.app import app
+
+            try:
+                uvicorn.run(
+                    app,
+                    host=host,
+                    port=port,
+                    log_level="info"
+                )
+            finally:
+                # 清理PID文件
+                if pid_file.exists():
+                    pid_file.unlink()
+
+    except KeyboardInterrupt:
+        print()
+        print_status("服务已停止", "info")
+        print()
+
+        # Ctrl+C 停止时也执行清理
+        cleanup_on_stop()
+
+    except Exception as e:
+        print_status(f"启动失败: {e}", "error")
+        import traceback
+        if dev:
+            traceback.print_exc()
+        # 清理PID文件
+        pid_file = Path.home() / '.qcc' / 'web.pid'
+        if pid_file.exists():
+            pid_file.unlink()
+
+
+@web.command()
+@click.option('--keep-proxy', is_flag=True, help='保持代理服务运行')
+@click.option('--keep-config', is_flag=True, help='保持 Claude Code 配置')
+def stop(keep_proxy, keep_config):
+    """停止 Web UI 服务
+
+    默认会自动：
+    - 停止代理服务（如果在运行）
+    - 还原 Claude Code 配置（如果已应用）
+
+    使用 --keep-proxy 可以保持代理运行
+    使用 --keep-config 可以保持配置不还原
+    """
+    try:
+        import time
+
+        print_header("QCC Web UI")
+
+        server_info = get_running_web_server()
+
+        if not server_info:
+            print_status("Web UI 未运行", "info")
+            return
+
+        pid = server_info['pid']
+        host = server_info['host']
+        port = server_info['port']
+
+        print(f"正在停止 Web UI (PID: {pid}, {host}:{port})...")
+
+        # 停止 Web UI 服务
+        if stop_running_web_server():
+            # 等待进程停止
+            time.sleep(1)
+
+            # 再次检查是否已停止
+            if not get_running_web_server():
+                print_status("Web UI 已停止", "success")
+            else:
+                print_status("Web UI 可能未完全停止，请检查进程状态", "warning")
+                return
+        else:
+            print_status("停止 Web UI 失败", "error")
+            return
+
+        print()
+
+        # 执行清理操作
+        cleanup_on_stop(keep_proxy=keep_proxy, keep_config=keep_config)
+
+    except Exception as e:
+        print_status(f"停止失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
+
+
+@web.command()
+def status():
+    """查看 Web UI 状态"""
+    try:
+        from datetime import datetime
+
+        print_header("Web UI 状态")
+
+        server_info = get_running_web_server()
+
+        if not server_info:
+            print_status("Web UI 未运行", "info")
+            safe_print("💡 启动服务: uvx qcc web start")
+            safe_print("💡 开发模式: uvx qcc web start --dev")
+            return
+
+        # 显示服务器信息
+        pid = server_info['pid']
+        host = server_info['host']
+        port = server_info['port']
+        start_time = server_info['start_time']
+        dev_mode = server_info.get('dev_mode', False)
+        vite_pid = server_info.get('vite_pid')
+
+        # 计算运行时间
+        start_dt = datetime.fromisoformat(start_time)
+        uptime_seconds = (datetime.now() - start_dt).total_seconds()
+        hours = int(uptime_seconds // 3600)
+        minutes = int((uptime_seconds % 3600) // 60)
+        seconds = int(uptime_seconds % 60)
+
+        print_status("Web UI 正在运行", "success")
+        print()
+        safe_print(f"📊 服务器信息:")
+        print(f"  运行模式: {'开发模式 (热重载)' if dev_mode else '生产模式'}")
+        print(f"  后端进程 ID: {pid}")
+        if vite_pid:
+            print(f"  前端进程 ID: {vite_pid}")
+
+        if dev_mode:
+            print(f"  前端地址: http://{host}:5173")
+            print(f"  后端 API: http://{host}:{port}")
+        else:
+            print(f"  访问地址: http://{host}:{port}")
+
+        print(f"  API 文档: http://{host}:{port}/api/docs")
+        print(f"  启动时间: {start_time[:19].replace('T', ' ')}")
+        print(f"  运行时长: {hours}小时 {minutes}分钟 {seconds}秒")
+        print()
+        safe_print("💡 停止服务: uvx qcc web stop")
+
+    except Exception as e:
+        print_status(f"状态检查失败: {e}", "error")
+        import traceback
+        traceback.print_exc()
 
 
 def main():

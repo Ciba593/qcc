@@ -306,82 +306,125 @@ class ConfigManager:
             return False
     
     def sync_from_cloud(self) -> bool:
-        """从云端同步配置"""
+        """从云端同步配置（包括 EndpointGroup）"""
         if not self.storage_backend:
             return True  # 本地存储模式，直接返回成功
-        
+
         try:
             print("[~] 从云端同步配置...")
-            
+
             config_data = self.storage_backend.load_config()
             if not config_data:
                 print("[=] 云端暂无配置数据")
                 return True
-            
+
             # 解密配置数据
             if self.crypto_manager and 'encrypted_profiles' in config_data:
                 encrypted_profiles = config_data['encrypted_profiles']
-                profiles_json = self.crypto_manager.decrypt(encrypted_profiles)
-                profiles_data = json.loads(profiles_json)
+                decrypted_json = self.crypto_manager.decrypt(encrypted_profiles)
+                decrypted_data = json.loads(decrypted_json)
+
+                # 新格式：包含 profiles 和 endpoint_groups
+                if isinstance(decrypted_data, dict) and 'profiles' in decrypted_data:
+                    profiles_data = decrypted_data.get('profiles', {})
+                    endpoint_groups_data = decrypted_data.get('endpoint_groups', {})
+                else:
+                    # 旧格式：只有 profiles
+                    profiles_data = decrypted_data
+                    endpoint_groups_data = {}
             else:
                 profiles_data = config_data.get('profiles', {})
-            
+                endpoint_groups_data = config_data.get('endpoint_groups', {})
+
             # 更新本地配置
             self.profiles.clear()
             for name, profile_data in profiles_data.items():
                 self.profiles[name] = ConfigProfile.from_dict(profile_data)
-            
+
+            # 更新 EndpointGroup
+            if endpoint_groups_data:
+                endpoint_groups_file = Path.home() / ".fastcc" / "endpoint_groups.json"
+                try:
+                    with open(endpoint_groups_file, 'w', encoding='utf-8') as f:
+                        json.dump({
+                            'version': '1.0',
+                            'last_updated': datetime.now().isoformat(),
+                            'groups': endpoint_groups_data
+                        }, f, indent=2, ensure_ascii=False)
+                    endpoint_groups_file.chmod(0o600)
+                except Exception as e:
+                    print(f"[!] 保存 EndpointGroup 失败: {e}")
+
             # 更新设置
             if 'settings' in config_data:
                 self.settings.update(config_data['settings'])
-            
+
             print(f"[OK] 已同步 {len(self.profiles)} 个配置档案")
-            
+            if endpoint_groups_data:
+                print(f"[OK] 已同步 {len(endpoint_groups_data)} 个 EndpointGroup")
+
             # 保存到本地缓存
             self._save_local_cache()
-            
+
             return True
-            
+
         except Exception as e:
             print(f"[X] 从云端同步失败: {e}")
             return False
     
     def sync_to_cloud(self) -> bool:
-        """同步配置到云端"""
+        """同步配置到云端（包括 EndpointGroup）"""
         if not self.storage_backend:
             print("[i] 本地存储模式，无需云端同步")
             return True  # 本地存储模式，直接返回成功
-        
+
         try:
             print("[~] 同步配置到云端...")
-            
+
             # 准备配置数据
             profiles_data = {name: profile.to_dict() for name, profile in self.profiles.items()}
-            
+
+            # 加载 EndpointGroup 数据
+            endpoint_groups_data = {}
+            endpoint_groups_file = Path.home() / ".fastcc" / "endpoint_groups.json"
+            if endpoint_groups_file.exists():
+                try:
+                    with open(endpoint_groups_file, 'r', encoding='utf-8') as f:
+                        eg_data = json.load(f)
+                        endpoint_groups_data = eg_data.get('groups', {})
+                except Exception:
+                    pass
+
             config_data = {
                 'user_id': self.user_id,
                 'settings': self.settings,
                 'last_sync': datetime.now().isoformat()
             }
-            
+
             # 加密配置数据
             if self.crypto_manager:
-                profiles_json = json.dumps(profiles_data, ensure_ascii=False)
-                config_data['encrypted_profiles'] = self.crypto_manager.encrypt(profiles_json)
+                # 将 profiles 和 endpoint_groups 一起加密
+                all_data = {
+                    'profiles': profiles_data,
+                    'endpoint_groups': endpoint_groups_data
+                }
+                all_data_json = json.dumps(all_data, ensure_ascii=False)
+                config_data['encrypted_profiles'] = self.crypto_manager.encrypt(all_data_json)
             else:
                 config_data['profiles'] = profiles_data
-            
+                config_data['endpoint_groups'] = endpoint_groups_data
+
             # 上传到云端
             success = self.storage_backend.save_config(config_data)
-            
+
             if success:
                 print("[OK] 配置已同步到云端")
                 self._save_local_cache()
             else:
                 print("[X] 同步到云端失败")
-            
+
             return success
-            
+
         except Exception as e:
             # 检查是否是权限问题
             if "403" in str(e) and "Forbidden" in str(e):
@@ -423,22 +466,25 @@ class ConfigManager:
         if name not in self.profiles:
             print(f"[X] 配置档案 '{name}' 不存在")
             return False
-        
+
         del self.profiles[name]
-        
+
         # 如果删除的是默认配置，选择新的默认配置
         if self.settings['default_profile'] == name:
             if self.profiles:
                 self.settings['default_profile'] = next(iter(self.profiles))
             else:
                 self.settings['default_profile'] = None
-        
+
         print(f"[OK] 已删除配置档案: {name}")
-        
+
+        # 保存到本地缓存
+        self._save_local_cache()
+
         # 自动同步到云端
         if self.settings['auto_sync']:
             self.sync_to_cloud()
-        
+
         return True
     
     def list_profiles(self) -> List[ConfigProfile]:
@@ -461,14 +507,17 @@ class ConfigManager:
         if name not in self.profiles:
             print(f"[X] 配置档案 '{name}' 不存在")
             return False
-        
+
         self.settings['default_profile'] = name
         print(f"[OK] 已设置默认配置: {name}")
-        
+
+        # 保存到本地缓存
+        self._save_local_cache()
+
         # 自动同步到云端
         if self.settings['auto_sync']:
             self.sync_to_cloud()
-        
+
         return True
     
     def uninstall_local(self) -> bool:
@@ -539,8 +588,13 @@ class ConfigManager:
             # 优先使用第一个 endpoint，否则使用传统字段
             if profile.endpoints:
                 first_endpoint = profile.endpoints[0]
-                base_url = first_endpoint.base_url
-                api_key = first_endpoint.api_key
+                # 兼容处理：endpoints[0] 可能是 Endpoint 对象或字典
+                if isinstance(first_endpoint, dict):
+                    base_url = first_endpoint.get('base_url', '')
+                    api_key = first_endpoint.get('api_key', '')
+                else:
+                    base_url = first_endpoint.base_url
+                    api_key = first_endpoint.api_key
             else:
                 base_url = profile.base_url
                 api_key = profile.api_key

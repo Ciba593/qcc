@@ -169,10 +169,12 @@ class HealthMonitor:
             logger.debug(f"Endpoint {endpoint.id} 健康")
         elif check.result == HealthCheckResult.SUCCESS and not check.response_valid:
             # HTTP 200 但响应无效（例如：没有返回验证码）
+            error_msg = check.error_message or "响应无效（未包含验证码）"
             await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
-                is_failure=True
+                is_failure=True,
+                error_message=error_msg
             )
             logger.warning(
                 f"Endpoint {endpoint.id} 响应无效（未包含验证码）"
@@ -180,10 +182,12 @@ class HealthMonitor:
 
         elif check.result in [HealthCheckResult.TIMEOUT, HealthCheckResult.FAILURE]:
             # 超时或失败：设置为不健康状态
+            error_msg = check.error_message or f"请求{check.result.value}"
             await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
-                is_failure=True
+                is_failure=True,
+                error_message=error_msg
             )
             logger.warning(
                 f"Endpoint {endpoint.id} 不健康 "
