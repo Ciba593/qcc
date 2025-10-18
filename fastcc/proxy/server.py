@@ -68,8 +68,8 @@ class ProxyServer:
         self._failure_queue_task: Optional[asyncio.Task] = None
 
         # PID 文件路径
-        self.pid_file = Path.home() / '.qcc' / 'proxy.pid'
-        self.log_file = Path.home() / '.qcc' / 'proxy.log'
+        self.pid_file = Path.home() / '.fastcc' / 'proxy.pid'
+        self.log_file = Path.home() / '.fastcc' / 'proxy.log'
 
         # 统计信息
         self.stats = {
@@ -77,7 +77,8 @@ class ProxyServer:
             'successful_requests': 0,
             'failed_requests': 0,
             'start_time': None,
-            'uptime': 0
+            'uptime': 0,
+            'last_used_endpoint_id': None  # 最后使用的 endpoint ID
         }
 
         self._setup_routes()
@@ -85,7 +86,11 @@ class ProxyServer:
 
     def _setup_routes(self):
         """设置路由"""
-        # 捕获所有路径的所有 HTTP 方法
+        # 添加日志查看 API（使用特殊前缀避免与代理路径冲突）
+        self.app.router.add_get('/__qcc__/logs', self.handle_logs)
+        self.app.router.add_get('/__qcc__/stats', self.handle_stats_api)
+
+        # 捕获所有其他路径的所有 HTTP 方法（代理功能）
         self.app.router.add_route('*', '/{path:.*}', self.handle_request)
 
     def _setup_signal_handlers(self):
@@ -141,6 +146,8 @@ class ProxyServer:
                 else:
                     logger.info(f"[{request_id}] 选中 endpoint: {endpoint.id} ({endpoint.base_url})")
 
+                # 记录最后使用的 endpoint
+                self.stats['last_used_endpoint_id'] = endpoint.id
                 last_endpoint = endpoint
 
                 # 3. 转发请求
@@ -210,8 +217,16 @@ class ProxyServer:
         if self.load_balancer and self.config_manager:
             # 获取当前活跃配置的所有 endpoint
             endpoints = self._get_active_endpoints()
+            logger.debug(f"可用 endpoints 数量: {len(endpoints)}")
+            for ep in endpoints:
+                logger.debug(f"  - Endpoint {ep.id}: {ep.base_url}, 健康: {ep.is_healthy()}, 优先级: {ep.priority}")
+
             if endpoints:
-                return await self.load_balancer.select_endpoint(endpoints)
+                selected = await self.load_balancer.select_endpoint(endpoints)
+                logger.debug(f"负载均衡器选择: {selected.id if selected else 'None'}")
+                return selected
+            else:
+                logger.warning("没有可用的健康 endpoint")
 
         # 如果没有负载均衡器，使用简单的单配置模式
         if self.config_manager:
@@ -219,54 +234,74 @@ class ProxyServer:
             if default_profile:
                 # 如果配置有 endpoints，使用第一个
                 if hasattr(default_profile, 'endpoints') and default_profile.endpoints:
+                    logger.debug(f"使用默认配置的第一个 endpoint")
                     return default_profile.endpoints[0]
                 # 否则从传统字段创建临时 endpoint
                 from fastcc.core.endpoint import Endpoint
+                logger.debug(f"从默认配置创建临时 endpoint")
                 return Endpoint(
                     base_url=default_profile.base_url,
                     api_key=default_profile.api_key
                 )
 
+        logger.error("无法选择 endpoint：没有负载均衡器或配置管理器")
         return None
 
     def _get_active_endpoints(self):
         """获取当前活跃配置的所有健康 endpoint"""
         endpoints = []
         if not self.config_manager:
+            logger.warning("没有 config_manager，无法获取 endpoints")
             return endpoints
 
         # 如果指定了集群配置，使用该配置的 endpoints
         if self.cluster_name:
+            logger.debug(f"使用集群配置: {self.cluster_name}")
             profile = self.config_manager.get_profile(self.cluster_name)
             if profile and hasattr(profile, 'endpoints') and profile.endpoints:
+                total_count = len(profile.endpoints)
                 # 只返回启用且健康的 endpoint
                 endpoints = [
                     ep for ep in profile.endpoints
                     if ep.enabled and ep.is_healthy()
                 ]
+                logger.info(f"集群 '{self.cluster_name}': 总 {total_count} 个 endpoint, 健康 {len(endpoints)} 个")
+                for ep in profile.endpoints:
+                    logger.debug(f"  Endpoint {ep.id}: enabled={ep.enabled}, healthy={ep.is_healthy()}, status={ep.health_status}")
                 return endpoints
+            else:
+                logger.warning(f"集群配置 '{self.cluster_name}' 没有 endpoints")
 
         # 否则，优先使用 priority_manager 获取活跃配置
         profile_name = None
         if self.priority_manager:
             profile_name = self.priority_manager.get_active_profile()
+            logger.debug(f"priority_manager 活跃配置: {profile_name}")
 
         # 如果没有优先级配置，使用默认配置
         if not profile_name:
             profile = self.config_manager.get_default_profile()
+            logger.debug(f"使用默认配置: {profile.name if profile else 'None'}")
         else:
             profile = self.config_manager.get_profile(profile_name)
 
         if not profile:
+            logger.warning("没有可用的配置")
             return endpoints
 
         # 获取配置的 endpoints
         if hasattr(profile, 'endpoints') and profile.endpoints:
+            total_count = len(profile.endpoints)
             # 只返回启用且健康的 endpoint
             endpoints = [
                 ep for ep in profile.endpoints
                 if ep.enabled and ep.is_healthy()
             ]
+            logger.info(f"配置 '{profile.name}': 总 {total_count} 个 endpoint, 健康 {len(endpoints)} 个")
+            for ep in profile.endpoints:
+                logger.debug(f"  Endpoint {ep.id}: enabled={ep.enabled}, healthy={ep.is_healthy()}, status={ep.health_status}")
+        else:
+            logger.debug(f"配置 '{profile.name}' 没有 endpoints 属性")
 
         return endpoints
 
@@ -416,19 +451,34 @@ class ProxyServer:
                     is_success = response.status == 200
 
                     # 更新 endpoint 健康状态
-                    await endpoint.update_health_status(
-                        status='healthy' if is_success else 'unhealthy',
-                        increment_requests=True,
-                        is_failure=not is_success,
-                        response_time=response_time
-                    )
-
                     if is_success:
+                        await endpoint.update_health_status(
+                            status='healthy',
+                            increment_requests=True,
+                            is_failure=False,
+                            response_time=response_time
+                        )
                         logger.debug(
                             f"[{request_id}] 响应成功: {response.status}, "
                             f"耗时: {response_time:.2f}ms"
                         )
                     else:
+                        error_msg = f"HTTP {response.status}"
+                        # 尝试解析错误详情
+                        try:
+                            error_body = response_body.decode('utf-8')
+                            if len(error_body) < 200:  # 只保留短错误信息
+                                error_msg = f"HTTP {response.status}: {error_body}"
+                        except:
+                            pass
+
+                        await endpoint.update_health_status(
+                            status='unhealthy',
+                            increment_requests=True,
+                            is_failure=True,
+                            response_time=response_time,
+                            error_message=error_msg
+                        )
                         logger.warning(
                             f"[{request_id}] 响应失败: {response.status}, "
                             f"耗时: {response_time:.2f}ms"
@@ -437,47 +487,57 @@ class ProxyServer:
                         if self.failure_queue:
                             await self.failure_queue.add_failed_endpoint(
                                 endpoint.id,
-                                f"HTTP {response.status}"
+                                error_msg
                             )
 
                     # 构建代理响应
+                    # 注意：aiohttp 会自动解压响应体，所以需要移除压缩相关的响应头
+                    response_headers = dict(response.headers)
+                    # 移除压缩相关的头，避免客户端尝试再次解压
+                    response_headers.pop('Content-Encoding', None)
+                    response_headers.pop('Content-Length', None)  # 长度已变化
+
                     proxy_response = web.Response(
                         status=response.status,
                         body=response_body,
-                        headers=dict(response.headers)
+                        headers=response_headers
                     )
 
                     return proxy_response
 
         except asyncio.TimeoutError:
-            logger.error(f"[{request_id}] 请求超时")
+            error_msg = f"请求超时 (>{endpoint.timeout}s)"
+            logger.error(f"[{request_id}] {error_msg}")
             await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
-                is_failure=True
+                is_failure=True,
+                error_message=error_msg
             )
             # 将失败请求加入队列
             if self.failure_queue:
                 # 将失败的 endpoint 加入验证队列
                 await self.failure_queue.add_failed_endpoint(
                     endpoint.id,
-                    f"Timeout after {endpoint.timeout}s"
+                    error_msg
                 )
             return None
 
         except Exception as e:
-            logger.error(f"[{request_id}] 转发请求失败: {e}")
+            error_msg = f"请求失败: {str(e)}"
+            logger.error(f"[{request_id}] {error_msg}")
             await endpoint.update_health_status(
                 status='unhealthy',
                 increment_requests=True,
-                is_failure=True
+                is_failure=True,
+                error_message=error_msg
             )
             # 将失败请求加入队列
             if self.failure_queue:
                 # 将失败的 endpoint 加入验证队列
                 await self.failure_queue.add_failed_endpoint(
                     endpoint.id,
-                    str(e)
+                    error_msg
                 )
             return None
 
@@ -614,6 +674,9 @@ class ProxyServer:
         # 删除 PID 文件
         self._remove_pid()
 
+        # 尝试还原 Claude Code 配置
+        self._restore_claude_config()
+
         logger.info("[OK] 代理服务器已停止")
         print("[OK] 代理服务器已停止")
 
@@ -627,6 +690,110 @@ class ProxyServer:
 
         return stats
 
+    async def handle_logs(self, request: web.Request) -> web.Response:
+        """处理日志查看请求
+
+        查询参数:
+            - lines: 返回最后 N 行（默认 100）
+            - level: 过滤日志级别（DEBUG, INFO, WARNING, ERROR, ALL）
+            - grep: 搜索关键词
+        """
+        try:
+            # 获取查询参数
+            lines = int(request.query.get('lines', 100))
+            level = request.query.get('level', 'ALL').upper()
+            grep = request.query.get('grep', '')
+
+            # 读取日志文件
+            if not self.log_file.exists():
+                return web.json_response({
+                    'error': 'Log file not found',
+                    'log_file': str(self.log_file)
+                }, status=404)
+
+            with open(self.log_file, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+
+            # 过滤日志
+            filtered_lines = []
+            for line in all_lines:
+                if not line.strip():
+                    continue
+
+                # 级别过滤
+                if level != 'ALL':
+                    if f" - {level} - " not in line:
+                        continue
+
+                # 关键词过滤
+                if grep and grep.lower() not in line.lower():
+                    continue
+
+                filtered_lines.append(line.rstrip())
+
+            # 返回最后 N 行
+            display_lines = filtered_lines[-lines:] if len(filtered_lines) > lines else filtered_lines
+
+            return web.json_response({
+                'logs': display_lines,
+                'total_lines': len(filtered_lines),
+                'displayed_lines': len(display_lines),
+                'log_file': str(self.log_file),
+                'filters': {
+                    'lines': lines,
+                    'level': level,
+                    'grep': grep
+                }
+            })
+
+        except Exception as e:
+            logger.error(f"处理日志查看请求失败: {e}", exc_info=True)
+            return web.json_response({
+                'error': str(e)
+            }, status=500)
+
+    async def handle_stats_api(self, request: web.Request) -> web.Response:
+        """处理统计信息 API 请求"""
+        try:
+            stats = self.get_stats()
+
+            # 添加 endpoint 信息
+            if self.config_manager:
+                endpoints_info = []
+                all_endpoints = self._get_all_endpoints()
+
+                for ep in all_endpoints:
+                    endpoints_info.append({
+                        'id': ep.id,
+                        'base_url': ep.base_url,
+                        'priority': ep.priority,
+                        'enabled': ep.enabled,
+                        'health_status': ep.health_status,
+                        'is_healthy': ep.is_healthy()
+                    })
+
+                stats['endpoints'] = endpoints_info
+                stats['total_endpoints'] = len(all_endpoints)
+                stats['healthy_endpoints'] = len([ep for ep in all_endpoints if ep.is_healthy()])
+
+            # 添加失败队列信息（从内存中获取）
+            if self.failure_queue:
+                stats['failed_endpoints'] = list(self.failure_queue.failed_endpoints)
+                stats['failure_queue_size'] = len(self.failure_queue.failed_endpoints)
+                stats['endpoint_verify_counts'] = dict(self.failure_queue.verify_counts)
+            else:
+                stats['failed_endpoints'] = []
+                stats['failure_queue_size'] = 0
+                stats['endpoint_verify_counts'] = {}
+
+            return web.json_response(stats)
+
+        except Exception as e:
+            logger.error(f"处理统计信息请求失败: {e}", exc_info=True)
+            return web.json_response({
+                'error': str(e)
+            }, status=500)
+
     def _write_pid(self):
         """写入 PID 文件"""
         try:
@@ -638,6 +805,9 @@ class ProxyServer:
                     'port': self.port,
                     'start_time': datetime.now().isoformat()
                 }
+                # 添加 cluster_name（如果有）
+                if self.cluster_name:
+                    data['cluster_name'] = self.cluster_name
                 json.dump(data, f)
             logger.debug(f"PID 文件已写入: {self.pid_file}")
         except Exception as e:
@@ -652,6 +822,28 @@ class ProxyServer:
         except Exception as e:
             logger.error(f"删除 PID 文件失败: {e}")
 
+    def _restore_claude_config(self):
+        """还原 Claude Code 配置（如果之前有应用过代理）"""
+        try:
+            import shutil
+            claude_dir = Path.home() / ".claude"
+            backup_file = claude_dir / "settings.json.qcc_backup"
+            settings_file = claude_dir / "settings.json"
+            proxy_info_file = claude_dir / "qcc_proxy_info.json"
+
+            # 检查是否有备份
+            if backup_file.exists() and proxy_info_file.exists():
+                # 还原配置
+                shutil.copy2(backup_file, settings_file)
+                # 删除备份和代理信息
+                backup_file.unlink(missing_ok=True)
+                proxy_info_file.unlink(missing_ok=True)
+                logger.info("[OK] 已自动还原 Claude Code 配置")
+                print("[OK] 已自动还原 Claude Code 配置")
+        except Exception as e:
+            logger.warning(f"还原 Claude Code 配置失败: {e}")
+            # 不抛出异常，因为这不是关键操作
+
     @staticmethod
     def get_running_server():
         """获取正在运行的服务器信息
@@ -659,7 +851,7 @@ class ProxyServer:
         Returns:
             服务器信息字典，如果没有运行则返回 None
         """
-        pid_file = Path.home() / '.qcc' / 'proxy.pid'
+        pid_file = Path.home() / '.fastcc' / 'proxy.pid'
 
         if not pid_file.exists():
             return None

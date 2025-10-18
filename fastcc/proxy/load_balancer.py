@@ -1,8 +1,11 @@
 """QCC Load Balancer - 负载均衡器"""
 
 import random
+import logging
 from typing import List, Optional
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 
 class LoadBalanceStrategy(Enum):
@@ -38,27 +41,39 @@ class LoadBalancer:
         Returns:
             选中的 endpoint，如果没有可用的返回 None
         """
+        logger.debug(f"LoadBalancer.select_endpoint 调用: 策略={self.strategy.value}, 输入 endpoints={len(endpoints)}")
+
         if not endpoints:
+            logger.warning("没有可用的 endpoints")
             return None
 
         # 过滤健康的 endpoint
         healthy_endpoints = [ep for ep in endpoints if ep.is_healthy()]
+        logger.debug(f"健康 endpoints: {len(healthy_endpoints)}/{len(endpoints)}")
+
+        for ep in endpoints:
+            logger.debug(f"  - Endpoint {ep.id}: priority={ep.priority}, healthy={ep.is_healthy()}, status={ep.health_status}")
 
         if not healthy_endpoints:
+            logger.warning("没有健康的 endpoints")
             return None
 
+        selected = None
         if self.strategy == LoadBalanceStrategy.WEIGHTED:
-            return self._weighted_select(healthy_endpoints)
+            selected = self._weighted_select(healthy_endpoints)
         elif self.strategy == LoadBalanceStrategy.ROUND_ROBIN:
-            return self._round_robin_select(healthy_endpoints)
+            selected = self._round_robin_select(healthy_endpoints)
         elif self.strategy == LoadBalanceStrategy.RANDOM:
-            return self._random_select(healthy_endpoints)
+            selected = self._random_select(healthy_endpoints)
         elif self.strategy == LoadBalanceStrategy.LEAST_CONNECTIONS:
-            return self._least_connections_select(healthy_endpoints)
+            selected = self._least_connections_select(healthy_endpoints)
         elif self.strategy == LoadBalanceStrategy.PRIORITY_FAILOVER:
-            return self._priority_failover_select(healthy_endpoints)
+            selected = self._priority_failover_select(healthy_endpoints)
+        else:
+            selected = healthy_endpoints[0]
 
-        return healthy_endpoints[0]
+        logger.info(f"负载均衡器选择: {selected.id if selected else 'None'} (策略: {self.strategy.value})")
+        return selected
 
     def _weighted_select(self, endpoints: List):
         """加权随机选择"""
@@ -106,5 +121,11 @@ class LoadBalancer:
         # 按 priority 值从小到大排序（数字越小优先级越高）
         sorted_endpoints = sorted(endpoints, key=lambda ep: ep.priority)
 
+        logger.debug(f"优先级排序后的 endpoints:")
+        for ep in sorted_endpoints:
+            logger.debug(f"  - {ep.id}: priority={ep.priority}")
+
         # 返回优先级最高（priority 值最小）的节点
-        return sorted_endpoints[0]
+        selected = sorted_endpoints[0]
+        logger.debug(f"选择优先级最高的 endpoint: {selected.id} (priority={selected.priority})")
+        return selected

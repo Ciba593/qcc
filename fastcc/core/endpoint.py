@@ -64,7 +64,8 @@ class Endpoint:
             'total_requests': 0,
             'failed_requests': 0,
             'success_rate': 100.0,
-            'avg_response_time': 0
+            'avg_response_time': 0,
+            'last_error': None  # 最后一次错误信息
         }
 
         # 异步锁：写操作加锁，读操作不加锁
@@ -87,13 +88,16 @@ class Endpoint:
         hash_value = hashlib.sha256(content).hexdigest()
         return hash_value[:8]  # 取前 8 个字符作为短 ID
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, include_health_status: bool = False) -> Dict[str, Any]:
         """转换为字典（用于序列化）
 
+        Args:
+            include_health_status: 是否包含健康状态（默认 False，因为健康状态应该只保存在内存中）
+
         Returns:
-            包含所有配置信息的字典
+            包含配置信息的字典
         """
-        return {
+        result = {
             'id': self.id,
             'base_url': self.base_url,
             'api_key': self.api_key,
@@ -104,9 +108,14 @@ class Endpoint:
             'timeout': self.timeout,
             'source_profile': self.source_profile,
             'metadata': self.metadata,
-            'created_at': self.created_at,
-            'health_status': self.health_status
+            'created_at': self.created_at
         }
+
+        # 只在明确要求时才包含健康状态（用于 API 响应等场景）
+        if include_health_status:
+            result['health_status'] = self.health_status
+
+        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Endpoint':
@@ -131,7 +140,8 @@ class Endpoint:
         )
         endpoint.id = data.get('id', endpoint.id)
         endpoint.created_at = data.get('created_at', endpoint.created_at)
-        endpoint.health_status = data.get('health_status', endpoint.health_status)
+        # 注意：不从持久化数据加载 health_status，每次启动时都使用新的初始状态
+        # 这样可以确保状态是实时的，不会受到旧数据的影响
         return endpoint
 
     @classmethod
@@ -210,7 +220,8 @@ class Endpoint:
         status: Optional[str] = None,
         increment_requests: bool = False,
         is_failure: bool = False,
-        response_time: Optional[float] = None
+        response_time: Optional[float] = None,
+        error_message: Optional[str] = None
     ):
         """更新健康状态（异步方法，使用写锁保护）
 
@@ -219,6 +230,7 @@ class Endpoint:
             increment_requests: 是否增加请求计数
             is_failure: 是否为失败请求
             response_time: 响应时间（毫秒）
+            error_message: 错误信息（可选）
         """
         async with self._lock:
             if status:
@@ -232,8 +244,13 @@ class Endpoint:
                 if is_failure:
                     self.health_status['failed_requests'] += 1
                     self.health_status['consecutive_failures'] += 1
+                    # 记录错误信息
+                    if error_message:
+                        self.health_status['last_error'] = error_message
                 else:
                     self.health_status['consecutive_failures'] = 0
+                    # 成功时清除错误信息
+                    self.health_status['last_error'] = None
 
                 # 更新成功率
                 if self.health_status['total_requests'] > 0:

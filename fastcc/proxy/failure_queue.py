@@ -43,6 +43,9 @@ class FailureQueue:
         # 上次验证时间记录
         self.last_check_times: Dict[str, datetime] = {}
 
+        # 每个 endpoint 的验证次数记录
+        self.verify_counts: Dict[str, int] = {}
+
         # 统计信息
         self.stats = {
             'total_failed': 0,
@@ -68,6 +71,7 @@ class FailureQueue:
             if endpoint_id not in self.failed_endpoints:
                 self.failed_endpoints.add(endpoint_id)
                 self.last_check_times[endpoint_id] = datetime.now()
+                self.verify_counts[endpoint_id] = 0  # 初始化验证次数为 0
                 self.stats['total_failed'] += 1
 
                 logger.info(
@@ -92,6 +96,7 @@ class FailureQueue:
             if endpoint_id in self.failed_endpoints:
                 self.failed_endpoints.remove(endpoint_id)
                 self.last_check_times.pop(endpoint_id, None)
+                self.verify_counts.pop(endpoint_id, None)  # 移除验证次数记录
                 logger.info(f"Endpoint {endpoint_id} 已从失败队列移除")
                 self._save()
 
@@ -141,7 +146,13 @@ class FailureQueue:
         for endpoint in endpoints_to_verify:
             self.stats['total_verified'] += 1
 
-            logger.info(f"验证 endpoint {endpoint.id} ({endpoint.base_url})")
+            # 增加该 endpoint 的验证次数
+            self.verify_counts[endpoint.id] = self.verify_counts.get(endpoint.id, 0) + 1
+
+            logger.info(
+                f"验证 endpoint {endpoint.id} ({endpoint.base_url}) "
+                f"[第 {self.verify_counts[endpoint.id]} 次验证]"
+            )
 
             # 使用对话检查器验证
             check = await self.conversational_checker.check_endpoint(endpoint)
@@ -154,10 +165,10 @@ class FailureQueue:
 
             # 判断是否真正恢复：需要同时满足 result=SUCCESS 和 response_valid=True
             if check.result == HealthCheckResult.SUCCESS and check.response_valid:
-                # 恢复健康
+                # 恢复健康 - 注意：必须设置 increment_requests=True 才能重置 consecutive_failures
                 await endpoint.update_health_status(
                     status='healthy',
-                    increment_requests=False,
+                    increment_requests=True,
                     is_failure=False,
                     response_time=check.response_time_ms
                 )
@@ -194,56 +205,23 @@ class FailureQueue:
         """清空队列"""
         self.failed_endpoints.clear()
         self.last_check_times.clear()
+        self.verify_counts.clear()
         self._save()
         logger.info("失败队列已清空")
 
     def _save(self):
-        """保存队列到文件"""
-        try:
-            self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-
-            data = {
-                'failed_endpoints': list(self.failed_endpoints),
-                'last_check_times': {
-                    ep_id: dt.isoformat()
-                    for ep_id, dt in self.last_check_times.items()
-                },
-                'stats': self.stats,
-                'updated_at': datetime.now().isoformat()
-            }
-
-            with open(self.storage_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-
-            logger.debug(f"失败队列已保存到: {self.storage_path}")
-
-        except Exception as e:
-            logger.error(f"保存失败队列失败: {e}")
+        """
+        注意：失败队列现在只保存在内存中，不持久化到文件。
+        这样可以确保每次重启时都是全新的状态，避免过时数据的干扰。
+        此方法保留为空，以兼容现有代码调用。
+        """
+        # 不再持久化到文件
+        pass
 
     def _load(self):
-        """从文件加载队列"""
-        try:
-            if not self.storage_path.exists():
-                logger.debug("失败队列文件不存在，使用空队列")
-                return
-
-            with open(self.storage_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            # 加载失败的 endpoint
-            self.failed_endpoints = set(data.get('failed_endpoints', []))
-
-            # 加载上次检查时间
-            for ep_id, time_str in data.get('last_check_times', {}).items():
-                self.last_check_times[ep_id] = datetime.fromisoformat(time_str)
-
-            # 加载统计信息
-            self.stats = data.get('stats', self.stats)
-
-            logger.debug(
-                f"失败队列已加载: {self.storage_path}, "
-                f"队列大小: {len(self.failed_endpoints)}"
-            )
-
-        except Exception as e:
-            logger.error(f"加载失败队列失败: {e}")
+        """
+        注意：失败队列现在只保存在内存中，不从文件加载。
+        此方法保留为空，以兼容现有代码调用。
+        """
+        # 不再从文件加载
+        pass
