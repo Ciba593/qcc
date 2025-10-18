@@ -56,6 +56,9 @@ path = "fastcc/__init__.py"
 [tool.hatch.build.targets.wheel]
 packages = ["fastcc"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"fastcc/web/static" = "fastcc/web/static"
+
 # uvx 兼容配置
 [tool.uvx]
 # 支持 uvx run qcc
