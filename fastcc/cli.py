@@ -3138,67 +3138,26 @@ def start(host, port, dev, no_browser):
                 cleanup()
 
         else:
-            # 生产模式：先构建前端，再启动后端
+            # 生产模式：直接启动后端（静态文件已打包在 fastcc/web/static）
             print_status("启动生产模式", "info")
             print_separator()
 
-            # 查找前端目录
-            # 尝试多个可能的位置
-            possible_locations = [
-                Path(__file__).parent.parent / 'qcc-web',  # 从 fastcc/cli.py 向上两级
-                Path.cwd() / 'qcc-web',  # 当前工作目录
-                Path(__file__).resolve().parent.parent / 'qcc-web',  # 解析符号链接后的路径
-            ]
-
-            web_dir = None
-            for location in possible_locations:
-                if location.exists() and (location / 'package.json').exists():
-                    web_dir = location
-                    break
-
-            if not web_dir:
-                print_status("前端目录不存在，请确认项目结构", "error")
-                print(f"已尝试查找位置:")
-                for loc in possible_locations:
-                    print(f"  - {loc}")
-                print(f"\n当前工作目录: {Path.cwd()}")
-                print(f"CLI 文件位置: {Path(__file__).parent}")
+            # 检查静态文件是否存在
+            static_dir = Path(__file__).parent / 'web' / 'static'
+            if not static_dir.exists() or not (static_dir / 'index.html').exists():
+                print_status("静态文件不存在，请检查包安装", "error")
+                print(f"期望的静态文件位置: {static_dir}")
+                print(f"\n如果您是在开发环境，请使用开发模式:")
+                print(f"  uvx --from . qcc web start --dev")
                 return
 
-            dist_dir = web_dir / 'dist'
-
-            # 检查是否需要构建前端
-            if not dist_dir.exists() or not (dist_dir / 'index.html').exists():
-                print_status("检测到前端未构建，开始构建...", "info")
-
-                # 检查 node_modules
-                if not (web_dir / 'node_modules').exists():
-                    print_status("正在安装前端依赖...", "info")
-                    result = subprocess.run(
-                        ['npm', 'install'],
-                        cwd=str(web_dir),
-                        capture_output=True,
-                        text=True
-                    )
-                    if result.returncode != 0:
-                        print_status(f"安装依赖失败: {result.stderr}", "error")
-                        return
-
-                # 构建前端
-                result = subprocess.run(
-                    ['npm', 'run', 'build'],
-                    cwd=str(web_dir),
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    print_status(f"构建前端失败: {result.stderr}", "error")
-                    return
-                print_status("前端构建完成", "success")
-
-            print(f"启动 Web 服务...")
-            print(f"访问地址: http://{host}:{port}")
-            print(f"API 文档: http://{host}:{port}/api/docs")
+            print_status("后端 API 服务器已启动", "success")
+            print_status("前端静态文件服务已就绪", "success")
+            print("")
+            print("🌐 访问地址:")
+            print(f"   http://{host}:{port}")
+            print("📚 API 文档:")
+            print(f"   http://{host}:{port}/api/docs")
             print_separator()
 
             # 写入PID文件
