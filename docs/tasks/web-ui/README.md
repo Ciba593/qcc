@@ -5,27 +5,30 @@
 ## 📖 文档导航
 
 - **[快速开始](./快速开始.md)** - 安装和启动指南
-- **[开发工作流](./开发工作流.md)** - 热重载开发、调试技巧、性能优化
-- **[开发计划](./开发计划.md)** - 完整的开发计划和路线图
-- **[开发完成报告](./开发完成报告.md)** - Phase 1 完成情况
 
 ## 🚀 快速开始
 
-### 零安装运行 (推荐)
+### 安装
 
 ```bash
-# 使用 uvx 一键启动 (自动安装所有依赖)
-uvx -n --from . qcc web start
+# 使用安装脚本（推荐）
+./setup-web.sh
+
+# 或手动安装
+pip install -e '.[web]'
 ```
 
-### 传统安装
+### 启动
 
 ```bash
-# 安装 qcc
-pip install -e .
-
 # 启动 Web UI
 qcc web start
+
+# 指定端口
+qcc web start --port 8080
+
+# 开发模式（自动重载）
+qcc web start --dev
 ```
 
 ### 访问
@@ -35,21 +38,28 @@ qcc web start
 
 ## ✨ 功能特性
 
-### ✅ 已实现
+### ✅ 已实现（v0.5.0）
 
-- **仪表盘** - 系统概览、统计信息
-- **配置管理** - 查看、使用、删除配置
-- **Endpoint 管理** - 管理 API endpoint
-- **代理服务** - 监控代理状态、控制启停
+#### 核心功能
+- **仪表盘** - 系统概览、存储方式、代理状态、Endpoint 健康状况
+- **配置管理** - 创建、查看、编辑、删除、使用配置
+- **Endpoint 管理** - 创建和管理高可用代理组（EndpointGroup）
+- **代理服务** - 启动、停止、查看日志、实时监控
+- **健康监控** - 实时健康检查、成功率、响应时间统计
+- **失败队列** - 查看失败节点、重试管理
 
-### 🔄 开发中
+#### 高级特性
+- **实时状态显示** - Header 显示当前系统配置和激活节点
+- **自动刷新** - 健康数据每 5 秒自动更新
+- **运行时管理** - 动态添加/移除/移动节点
+- **Claude Code 集成** - 一键应用配置到 Claude Code
 
-- 代理启动功能
-- 日志查看
-- 优先级管理
-- 健康监控
-- 性能指标
-- 失败队列管理
+### 主要改进
+
+1. **配置删除修复** - 修复删除后配置重新出现的问题
+2. **存储方式显示** - 正确显示 GitHub/云盘/本地存储类型
+3. **健康监控数据** - 从运行时代理获取准确的健康状况
+4. **Header 状态栏** - 实时显示系统配置和当前激活节点
 
 ## 🛠️ 技术栈
 
@@ -57,49 +67,29 @@ qcc web start
 - React 18 + TypeScript
 - Ant Design
 - React Router
-- TanStack Query
-- Axios
-- Vite
+- TanStack Query（数据管理）
+- Axios（API 客户端）
+- Vite（构建工具）
 
 **后端**:
-- FastAPI
-- Pydantic
-- Uvicorn
+- FastAPI（Web 框架）
+- Pydantic（数据验证）
+- Uvicorn（ASGI 服务器）
+- aiohttp（异步 HTTP 客户端）
 
-## 📊 开发进度
+## 📊 功能完成度
 
-| 模块 | CLI 命令 | 完成度 |
-|------|---------|--------|
-| 配置管理 | 7 | 100% ✅ |
-| Endpoint | 3 | 100% ✅ |
-| 代理服务 | 4 | 50% 🔄 |
-| 健康监控 | 5 | 0% ⏳ |
-| 优先级 | 4 | 0% ⏳ |
-| 失败队列 | 4 | 0% ⏳ |
+| 模块 | 状态 | 说明 |
+|------|------|------|
+| 配置管理 | ✅ 100% | 完整的 CRUD 操作 |
+| Endpoint 管理 | ✅ 100% | EndpointGroup 高可用组 |
+| 代理服务 | ✅ 100% | 启动、停止、日志查看 |
+| 健康监控 | ✅ 100% | 实时健康检查和统计 |
+| 失败队列 | ✅ 100% | 查看和重试管理 |
+| 运行时管理 | ✅ 100% | 动态节点管理 |
+| Claude Config | ✅ 100% | 配置应用和还原 |
 
-**总体进度**: 44% (12/27 命令已实现)
-
-## 🎯 开发路线图
-
-### Phase 1: 基础设施 ✅
-- 前后端项目搭建
-- 核心 API 实现
-- 基础页面开发
-
-### Phase 2: 核心功能 (进行中)
-- Endpoint 管理完善
-- 代理服务完整实现
-- 配置创建对话框
-
-### Phase 3: 高级功能
-- 优先级管理
-- 健康监控
-- 性能指标
-
-### Phase 4: 优化发布
-- WebSocket 实时推送
-- 性能优化
-- 完整测试
+**总体完成度**: 100% ✅
 
 ## 📁 项目结构
 
@@ -107,76 +97,90 @@ qcc web start
 qcc-web/                 # 前端项目
 ├── src/
 │   ├── api/            # API 客户端
+│   │   └── client.ts   # API 接口定义
 │   ├── pages/          # 页面组件
+│   │   ├── Dashboard.tsx
+│   │   ├── Configs.tsx
+│   │   ├── Endpoints.tsx
+│   │   ├── Proxy.tsx
+│   │   └── Health.tsx
 │   ├── layouts/        # 布局组件
-│   ├── components/     # 通用组件
+│   │   └── MainLayout.tsx
 │   └── types/          # TypeScript 类型
-└── dist/               # 构建产物
+├── dist/               # 构建产物
+└── package.json        # 依赖配置
 
 fastcc/web/             # 后端模块
 ├── app.py              # FastAPI 应用
 ├── models.py           # 数据模型
+├── utils.py            # 工具函数
 ├── routers/            # API 路由
-│   ├── dashboard.py
-│   ├── configs.py
-│   ├── endpoints.py
-│   ├── proxy.py
-│   └── ...
+│   ├── dashboard.py    # 仪表盘 API
+│   ├── configs.py      # 配置管理 API
+│   ├── endpoints.py    # Endpoint 管理 API
+│   ├── proxy.py        # 代理服务 API
+│   ├── health.py       # 健康监控 API
+│   ├── queue.py        # 失败队列 API
+│   ├── priority.py     # 优先级 API
+│   └── claude_config.py # Claude Code 配置 API
 └── static/             # 前端静态文件
 ```
 
 ## 🔧 开发指南
 
-### 推荐开发模式: 前后端同时热重载
+### 前端开发（热重载）
 
-**终端 1 - 后端热重载**:
 ```bash
-uvx --from . qcc web start --dev --no-browser
-# 修改 fastcc/web/ 下的 Python 文件，服务器自动重启
+# 启动前端开发服务器
+cd qcc-web
+npm run dev
+# 访问 http://localhost:5173
 ```
 
-**终端 2 - 前端热重载**:
+### 后端开发（热重载）
+
 ```bash
-cd qcc-web && npm run dev
-# 修改 src/ 下的文件，浏览器自动刷新（HMR）
+# 启动后端开发服务器（自动重载）
+qcc web start --dev --no-browser
+# 访问 http://127.0.0.1:8080
 ```
 
-**访问**: http://localhost:5173 (前端开发服务器，包含热模块替换)
-
-更多开发技巧请查看 **[开发工作流文档](./开发工作流.md)**，包括：
-- 不同开发场景的最佳实践
-- 前后端调试技巧
-- 性能优化建议
-- 常见问题解决方案
-
-### 部署流程
+### 构建部署
 
 ```bash
 # 1. 构建前端
-cd qcc-web && npm run build
+cd qcc-web
+npm run build
 
-# 2. 复制到后端
+# 2. 复制到后端静态目录
 cp -r dist/* ../fastcc/web/static/
 
-# 3. 启动服务
-cd .. && qcc web start
+# 3. 启动生产服务器
+cd ..
+qcc web start
 ```
 
-## 🐛 已知问题
+## 🌐 API 接口
 
-1. TypeScript 类型部分使用 any (待完善)
-2. WebSocket 实时推送未实现
-3. 部分页面功能待开发
+完整的 API 文档可通过以下方式访问：
+- **Swagger UI**: http://127.0.0.1:8080/api/docs
+- **ReDoc**: http://127.0.0.1:8080/api/redoc
 
-## 🤝 贡献
+主要 API 端点：
+- `/api/dashboard/*` - 仪表盘数据
+- `/api/configs/*` - 配置管理
+- `/api/endpoints/*` - Endpoint 管理
+- `/api/proxy/*` - 代理服务控制
+- `/api/health/*` - 健康监控
+- `/api/queue/*` - 失败队列
+- `/api/claude-config/*` - Claude Code 配置
 
-欢迎贡献代码！请参考：
+## 🐛 问题反馈
 
-1. Fork 项目
-2. 创建特性分支
-3. 提交更改
-4. 推送到分支
-5. 创建 Pull Request
+如果遇到问题，请提供：
+1. 错误信息或截图
+2. 操作步骤
+3. 日志文件（`~/.fastcc/web.log`）
 
 ## 📄 许可证
 
@@ -184,4 +188,4 @@ MIT License
 
 ---
 
-**QCC Web UI** - 让配置管理更简单、更直观 ✨
+**QCC Web UI v0.5.0** - 让配置管理更简单、更直观 ✨
