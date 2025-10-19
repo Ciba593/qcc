@@ -7,7 +7,7 @@ name = "qcc"
 dynamic = ["version"]
 description = "🚀 现代化 Claude Code 配置管理神器 - 零配置启动，多端同步，安全加密，厂商快速配置"
 readme = "README.md"
-license = "MIT"
+license = {text = "CC-BY-NC-4.0"}
 requires-python = ">=3.9"
 authors = [
     { name = "QCC Team" },
@@ -16,7 +16,7 @@ keywords = ["claude", "config", "cli", "ai", "anthropic", "provider", "fast-conf
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: Free For Educational Use",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",

@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
 [![PyPI](https://img.shields.io/pypi/v/qcc.svg)](https://pypi.org/project/qcc/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-CC%20BY--NC%204.0-green.svg)](LICENSE)
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 **🌟 现代化 Claude Code 配置管理神器 🌟**
@@ -478,7 +478,15 @@ python -m twine upload dist/*
 
 ## 📄 开源协议
 
-**MIT License** - 自由使用，欢迎贡献！
+**CC BY-NC 4.0** (知识共享署名-非商业性使用 4.0 国际许可协议)
+
+- ✅ **允许**: 复制、分发、修改本项目
+- ✅ **允许**: 个人学习、研究使用
+- ✅ **允许**: 开源项目中使用
+- ⚠️ **要求**: 使用时必须署名
+- ❌ **禁止**: 商业使用（如需商业授权请联系）
+
+详见 [LICENSE](LICENSE) 文件。
 
 ---
 
