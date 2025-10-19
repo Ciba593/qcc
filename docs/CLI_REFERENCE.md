@@ -57,7 +57,51 @@ uvx qcc uninstall          # 卸载本地配置
 
 ---
 
-## 🌐 代理服务命令 (v0.4.0)
+## 🎮 Web UI 管理命令 (v0.5.0+)
+
+### web start - 启动 Web UI
+```bash
+uvx qcc web start [options]
+
+选项:
+  --host TEXT      监听地址 (默认: 127.0.0.1)
+  --port INTEGER   监听端口 (默认: 8080)
+  --dev            开发模式（前后端热重载）
+  --no-browser     不自动打开浏览器
+
+v0.6.1 修复:
+  - 修复自定义端口时前端 API 地址不匹配问题
+  - 前端现在动态使用当前页面地址，支持任意端口
+
+示例:
+  uvx qcc web start                    # 生产模式，默认端口 8080
+  uvx qcc web start --port 9000        # 自定义端口（已修复）
+  uvx qcc web start --dev              # 开发模式（仅限本地）
+  uvx qcc web start --no-browser       # 不自动打开浏览器
+```
+
+### web status - 查看 Web UI 状态
+```bash
+uvx qcc web status                     # 显示 Web UI 运行状态
+```
+
+### web stop - 停止 Web UI
+```bash
+uvx qcc web stop [options]
+
+选项:
+  --keep-proxy     保持代理服务器运行
+  --keep-config    保持配置不还原
+
+示例:
+  uvx qcc web stop                     # 完全清理（停止代理 + 还原配置）
+  uvx qcc web stop --keep-proxy        # 保持代理运行
+  uvx qcc web stop --keep-config       # 保持配置不还原
+```
+
+---
+
+## 🌐 代理服务命令 (v0.4.0+)
 
 ### proxy start - 启动代理服务器
 ```bash
@@ -67,6 +111,13 @@ uvx qcc proxy start [options]
   --host TEXT      监听地址 (默认: 127.0.0.1)
   --port INTEGER   监听端口 (默认: 7860)
   --cluster TEXT   集群配置名称
+
+v0.6.0 新增特性:
+  - httpx 客户端：性能提升 33%，连接复用率 70%
+  - 断路器模式：自动隔离故障节点，节点切换速度提升 80%
+  - 会话亲和性：同一对话绑定同一节点，会话一致性 95%
+  - 智能错误分类：误判率降低 80%（从 15% 降至 3%）
+  - 负载均衡降级：多层降级策略确保高可用
 
 示例:
   uvx qcc proxy start
@@ -378,19 +429,37 @@ uvx qcc proxy logs -f
 1. **配置文件位置**: `~/.fastcc/` 或 `~/.qcc/`
 2. **日志文件**: `~/.qcc/proxy.log`
 3. **默认代理端口**: 7860
-4. **健康检查数据**: `~/.qcc/health_metrics.json`
-5. **失败队列数据**: `~/.qcc/failure_queue.json`
+4. **默认 Web UI 端口**: 8080 (v0.5.0+)
+5. **健康检查数据**: `~/.qcc/health_metrics.json`
+6. **失败队列数据**: `~/.qcc/failure_queue.json`
+
+### v0.6.x 新特性
+
+**v0.6.1** (2025-10-19):
+- 修复自定义端口时前端 API 地址不匹配问题
+- 前端动态获取 API 地址，支持任意端口
+
+**v0.6.0** (2025-10-19):
+- httpx 迁移：性能提升 33%，连接复用率 70%
+- 断路器模式：节点切换速度提升 80%
+- 会话亲和性：会话一致性提升至 95%
+- 错误分类器：误判率降低 80%
+- 负载均衡降级：智能多层降级策略
+- Windows 平台兼容性修复
 
 ---
 
 ## 🔗 相关文档
 
 - [README.md](../README.md) - 项目主文档
-- [v0.4.0 开发文档](./tasks/v0.4.0-代理服务/) - 详细技术文档
+- [v0.6.1 发布说明](./releases/v0.6.1.md) - 自定义端口修复
+- [v0.6.0 发布说明](./releases/v0.6.0.md) - 重大性能优化
+- [v0.5.0 发布说明](./releases/v0.5.0.md) - Web UI 管理界面
+- [v0.4.0 开发文档](./tasks/v0.4.0-代理服务/) - 代理服务详细技术文档
 - [完成报告](./tasks/v0.4.0-代理服务/COMPLETION_REPORT.md) - v0.4.0 完成情况
 
 ---
 
-**文档版本**: 1.0
-**最后更新**: 2025-10-17
-**基于代码版本**: fastcc/cli.py (当前实现)
+**文档版本**: 2.0
+**最后更新**: 2025-10-19
+**基于代码版本**: v0.6.1

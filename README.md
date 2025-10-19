@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://python.org)
 [![PyPI](https://img.shields.io/pypi/v/qcc.svg)](https://pypi.org/project/qcc/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Code Style](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
@@ -443,9 +443,12 @@ python -m twine upload dist/*
 
 | 📁 文件 | 📍 位置 | 📝 说明 |
 |--------|---------|--------|
-| 💾 **本地缓存** | `~/.fastcc/cache.json` | 配置档案缓存 |
+| 💾 **本地缓存** | `~/.fastcc/cache.json` 或 `~/.qcc/` | 配置档案缓存 |
 | 🔑 **GitHub Token** | `~/.fastcc/github_token.json` | 认证令牌 |
 | ⚙️ **Claude 设置** | `~/.claude/settings.json` | Claude Code 配置 |
+| 📋 **代理日志** | `~/.qcc/proxy.log` | 代理服务器日志 (v0.4.0+) |
+| 📊 **健康指标** | `~/.qcc/health_metrics.json` | 健康检测数据 (v0.4.0+) |
+| 🔄 **失败队列** | `~/.qcc/failure_queue.json` | 失败请求队列 (v0.4.0+) |
 
 ---
 
@@ -455,7 +458,7 @@ python -m twine upload dist/*
 
 | 🐍 Python | 📦 依赖 | 🖥️ 平台 |
 |-----------|---------|---------|
-| **3.7+** | click, requests, cryptography, rich, prompt_toolkit | Windows, macOS, Linux |
+| **3.9+** | click, requests, cryptography, rich, httpx, fastapi, uvicorn | Windows, macOS, Linux |
 
 </div>
 
@@ -485,17 +488,27 @@ python -m twine upload dist/*
 
 - **[📖 CLI 命令参考](docs/CLI_REFERENCE.md)** - 所有可用命令的完整参考（基于当前实现）
 
+### v0.6.x 代理优化更新（最新）
+
+**v0.6.1** (2025-10-19) - Bug 修复版本:
+- **[🐛 v0.6.1 发布说明](docs/releases/v0.6.1.md)** - 修复自定义端口时前端 API 地址不匹配问题
+
+**v0.6.0** (2025-10-19) - 重大性能优化:
+- **[🚀 v0.6.0 发布说明](docs/releases/v0.6.0.md)** - httpx 迁移、断路器、会话亲和性、错误分类器
+- **核心改进**: 性能提升 33%，节点切换速度提升 80%，误判率降低 80%
+- **新特性**: 断路器模式、会话亲和性、智能错误分类、连接池优化
+
 ### v0.5.0 Web UI 文档
 
 想了解更多关于 v0.5.0 Web UI 的详细信息？查看完整文档：
 
-- **[🚀 快速开始](docs/tasks/web-ui/快速开始.md)** - Web UI 安装和使用指南
-- **[⚡ 一键启动](docs/tasks/web-ui-one-command-start.md)** - 开发模式和生产模式详解
-- **[🧹 自动清理](docs/tasks/web-ui-stop-cleanup.md)** - 停止时的自动清理功能
-- **[🔧 开发模式](docs/tasks/web-ui-dev-mode.md)** - 前后端热重载测试文档
+- **[🚀 快速开始](docs/tasks/v0.5.0-web-ui/用户指南/快速开始.md)** - Web UI 安装和使用指南
+- **[⚡ 一键启动](docs/tasks/v0.5.0-web-ui/设计文档/web-ui-one-command-start.md)** - 开发模式和生产模式详解
+- **[🧹 自动清理](docs/tasks/v0.5.0-web-ui/设计文档/web-ui-stop-cleanup.md)** - 停止时的自动清理功能
+- **[🔧 开发模式](docs/tasks/v0.5.0-web-ui/设计文档/web-ui-dev-mode.md)** - 前后端热重载测试文档
 
 **快速参考**:
-- [📝 快速参考卡片](WEB_START_QUICK_REFERENCE.md) - 常用命令速查
+- [📝 快速参考卡片](docs/tasks/v0.5.0-web-ui/用户指南/WEB_START_QUICK_REFERENCE.md) - 常用命令速查
 
 ### v0.4.0 代理服务文档
 

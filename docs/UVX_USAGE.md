@@ -5,7 +5,7 @@ QCC 已完全支持通过 `uvx` 运行，用户无需安装即可使用！
 ## ✅ 发布状态
 
 - **PyPI**: https://pypi.org/project/qcc/
-- **最新版本**: v0.5.2
+- **最新版本**: v0.6.1
 - **uvx 支持**: ✅ 已配置
 
 ## 🚀 快速开始
@@ -27,7 +27,7 @@ uvx qcc --help
 
 ```bash
 # 使用特定版本
-uvx qcc@0.5.2 web start
+uvx qcc@0.6.1 web start
 
 # 使用最新版本
 uvx qcc@latest web start
@@ -40,7 +40,7 @@ uvx qcc@latest web start
 uvx --from git+https://github.com/yxhpy/qcc.git qcc web start
 
 # 从特定 tag
-uvx --from git+https://github.com/yxhpy/qcc.git@v0.5.2 qcc web start
+uvx --from git+https://github.com/yxhpy/qcc.git@v0.6.1 qcc web start
 ```
 
 ### 方式 4: 本地开发
@@ -166,10 +166,10 @@ uvx qcc web start
 
 ```bash
 # 测试新版本
-uvx qcc@0.5.2 web start
+uvx qcc@0.6.1 web start
 
 # 回退到旧版本
-uvx qcc@0.5.0 web start
+uvx qcc@0.5.2 web start
 ```
 
 ### 场景 3: CI/CD 环境
@@ -209,7 +209,7 @@ pipx install uv
 rm -rf ~/.cache/uv
 
 # 强制重新下载
-uvx -n qcc@0.5.2 web start
+uvx -n qcc@0.6.1 web start
 ```
 
 ### 问题 3: 网络问题
@@ -293,5 +293,5 @@ uvx qcc endpoint test <id>     # 测试 endpoint
 
 ---
 
-**最后更新**: 2025-10-18
-**版本**: v0.5.2
+**最后更新**: 2025-10-19
+**版本**: v0.6.1
