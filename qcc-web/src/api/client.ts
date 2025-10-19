@@ -147,4 +147,13 @@ export const api = {
       apiClient.post<ApiResponse>('/api/claude-config/apply', null, { params: data }),
     restore: () => apiClient.post<ApiResponse>('/api/claude-config/restore'),
   },
+
+  // System API
+  system: {
+    version: () => apiClient.get<ApiResponse>('/api/system/version'),
+    models: () => apiClient.get<ApiResponse>('/api/system/models'),
+    modelConfig: () => apiClient.get<ApiResponse>('/api/system/model-config'),
+    updateModelConfig: (data: any) => apiClient.post<ApiResponse>('/api/system/model-config', data),
+    settings: () => apiClient.get<ApiResponse>('/api/system/settings'),
+  },
 };

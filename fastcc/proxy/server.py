@@ -5,10 +5,15 @@ import json
 import logging
 import os
 from typing import Optional, Dict, Any
-from aiohttp import web, ClientSession, ClientTimeout
+from aiohttp import web
+import httpx
 from datetime import datetime
 from pathlib import Path
 import signal
+
+from .circuit_breaker import CircuitBreaker
+from .session_affinity import SessionAffinityManager
+from fastcc.core.error_classifier import ErrorClassifier, ErrorType
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +63,7 @@ class ProxyServer:
         self.app = web.Application()
         self.runner: Optional[web.AppRunner] = None
         self.site: Optional[web.TCPSite] = None
-        self.client_session: Optional[ClientSession] = None
+        self.http_client: Optional[httpx.AsyncClient] = None  # 使用 httpx 替代 aiohttp
         self.running = False
         self._shutting_down = False  # 防止重复关闭
 
@@ -66,9 +71,26 @@ class ProxyServer:
         self._health_monitor_task: Optional[asyncio.Task] = None
         self._failover_manager_task: Optional[asyncio.Task] = None
         self._failure_queue_task: Optional[asyncio.Task] = None
+        self._session_cleanup_task: Optional[asyncio.Task] = None
 
         # 关闭事件（延迟初始化，在 start() 中创建）
         self._shutdown_event: Optional[asyncio.Event] = None
+
+        # 断路器（避免重复请求故障节点）
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=3,  # 连续 3 次失败打开断路器
+            timeout=60  # 60 秒后尝试恢复
+        )
+
+        # 会话亲和性管理器（同一对话使用同一节点）
+        self.session_affinity = SessionAffinityManager(
+            ttl=18000  # 5 小时
+        )
+
+        # 将断路器引用传递给失败队列（用于恢复时重置断路器）
+        if self.failure_queue and self.circuit_breaker:
+            self.failure_queue.circuit_breaker = self.circuit_breaker
+            logger.debug("断路器引用已设置到失败队列")
 
         # PID 文件路径
         self.pid_file = Path.home() / '.fastcc' / 'proxy.pid'
@@ -193,7 +215,21 @@ class ProxyServer:
                     pass
                 body = self._maybe_override_model(body)
 
-            # 2. 重试逻辑：尝试所有可用的 endpoint
+            # 2. 提取 conversation_id (用于会话亲和性)
+            conversation_id = None
+            try:
+                # 从请求头中提取
+                conversation_id = request.headers.get('x-conversation-id')
+                # 或从请求体中提取
+                if not conversation_id and body:
+                    request_data = json.loads(body.decode('utf-8'))
+                    conversation_id = request_data.get('conversation_id')
+                if conversation_id:
+                    logger.debug(f"[{request_id}] 会话 ID: {conversation_id[:8]}...")
+            except Exception as e:
+                logger.debug(f"[{request_id}] 提取 conversation_id 失败: {e}")
+
+            # 3. 重试逻辑：尝试所有可用的 endpoint
             max_total_attempts = 5  # 总共最多尝试 5 次（跨多个 endpoint）
             max_per_endpoint = 2   # 单个 endpoint 最多尝试 2 次
 
@@ -202,9 +238,32 @@ class ProxyServer:
             failed_endpoints = {}  # {endpoint_id: 失败次数}
             excluded_endpoints = set()  # 已被排除的 endpoint
 
+            # 尝试使用会话绑定的 endpoint
+            bound_endpoint_id = None
+            if conversation_id and self.session_affinity:
+                bound_endpoint_id = await self.session_affinity.get_endpoint(conversation_id)
+                if bound_endpoint_id:
+                    logger.info(f"[{request_id}] 使用会话绑定的 endpoint: {bound_endpoint_id}")
+
             for attempt in range(max_total_attempts):
-                # 选择 endpoint，排除已失败的
-                endpoint = await self._select_endpoint(exclude_ids=excluded_endpoints)
+                # 选择 endpoint
+                if attempt == 0 and bound_endpoint_id:
+                    # 第一次尝试时，优先使用绑定的 endpoint
+                    endpoint = self._get_endpoint_by_id(bound_endpoint_id)
+                    if endpoint and endpoint.is_healthy() and not self.circuit_breaker.is_open(endpoint.id):
+                        logger.info(f"[{request_id}] 优先使用绑定 endpoint: {bound_endpoint_id}")
+                    else:
+                        # 绑定的 endpoint 不可用，解除绑定并重新选择
+                        if conversation_id and self.session_affinity:
+                            await self.session_affinity.unbind_session(conversation_id)
+                            logger.warning(
+                                f"[{request_id}] 绑定 endpoint {bound_endpoint_id} 不可用，"
+                                f"已解除会话绑定并重新选择"
+                            )
+                        endpoint = await self._select_endpoint(exclude_ids=excluded_endpoints)
+                else:
+                    # 正常选择，排除已失败的
+                    endpoint = await self._select_endpoint(exclude_ids=excluded_endpoints)
                 if not endpoint:
                     logger.warning(f"[{request_id}] 没有更多可用的 endpoint（已排除 {len(excluded_endpoints)} 个）")
                     break  # 没有更多 endpoint 可尝试了
@@ -249,6 +308,15 @@ class ProxyServer:
                     if response.status == 200:
                         self.stats['successful_requests'] += 1
                         logger.info(f"[{request_id}] ✓ 请求成功: HTTP {response.status}, endpoint: {endpoint.id}")
+
+                        # 记录断路器成功
+                        if self.circuit_breaker:
+                            self.circuit_breaker.record_success(endpoint.id)
+
+                        # 绑定会话（如果有 conversation_id）
+                        if conversation_id and self.session_affinity:
+                            await self.session_affinity.bind_session(conversation_id, endpoint.id)
+
                         return response
                     else:
                         # 非 200 状态码，记录失败
@@ -257,7 +325,17 @@ class ProxyServer:
                             f"[{request_id}] ✗ 收到非成功响应: HTTP {response.status}, endpoint: {endpoint.id}"
                         )
 
-                        # 如果这个 endpoint 失败次数达到上限，排除它
+                        # 记录断路器失败
+                        if self.circuit_breaker:
+                            self.circuit_breaker.record_failure(endpoint.id)
+                            # 立即检查断路器状态，如果打开则立即排除
+                            if self.circuit_breaker.is_open(endpoint.id):
+                                excluded_endpoints.add(endpoint_id)
+                                logger.warning(
+                                    f"[{request_id}] ⚠️ 断路器已打开，立即排除 endpoint: {endpoint.id}"
+                                )
+
+                        # 如果这个 endpoint 失败次数达到上限，也排除它
                         if failed_endpoints[endpoint_id] >= max_per_endpoint:
                             excluded_endpoints.add(endpoint_id)
                             logger.warning(
@@ -270,7 +348,17 @@ class ProxyServer:
                     failed_endpoints[endpoint_id] += 1
                     logger.error(f"[{request_id}] ✗ 请求失败（无响应），endpoint: {endpoint.id}")
 
-                    # 如果这个 endpoint 失败次数达到上限，排除它
+                    # 记录断路器失败
+                    if self.circuit_breaker:
+                        self.circuit_breaker.record_failure(endpoint.id)
+                        # 立即检查断路器状态，如果打开则立即排除
+                        if self.circuit_breaker.is_open(endpoint.id):
+                            excluded_endpoints.add(endpoint_id)
+                            logger.warning(
+                                f"[{request_id}] ⚠️ 断路器已打开，立即排除 endpoint: {endpoint.id}"
+                            )
+
+                    # 如果这个 endpoint 失败次数达到上限，也排除它
                     if failed_endpoints[endpoint_id] >= max_per_endpoint:
                         excluded_endpoints.add(endpoint_id)
                         logger.warning(
@@ -322,6 +410,20 @@ class ProxyServer:
             # 获取当前活跃配置的所有 endpoint
             endpoints = self._get_active_endpoints()
 
+            # ⚠️ 关键修复：排除失败队列中的 endpoint（永远不使用重试队列中的节点）
+            if self.failure_queue:
+                failure_count = 0
+                for ep in endpoints[:]:  # 使用切片创建副本进行迭代
+                    if ep.id in self.failure_queue.failed_endpoints:
+                        exclude_ids.add(ep.id)
+                        failure_count += 1
+                        logger.debug(f"跳过失败队列中的 endpoint: {ep.id}")
+                if failure_count > 0:
+                    logger.info(f"失败队列过滤: 排除了 {failure_count} 个 endpoint（重试队列中的节点不用于正常代理）")
+
+            # 注意：断路器过滤已在 _get_active_endpoints() 中完成
+            # 这里不再重复过滤，避免在极端情况下无节点可用
+
             # 过滤掉被排除的 endpoint
             if exclude_ids:
                 endpoints = [ep for ep in endpoints if ep.id not in exclude_ids]
@@ -356,18 +458,56 @@ class ProxyServer:
                     base_url=default_profile.base_url,
                     api_key=default_profile.api_key
                 )
-                if temp_ep.id not in exclude_ids:
-                    logger.debug(f"从默认配置创建临时 endpoint")
-                    return temp_ep
-                else:
+
+                # 修复：检查临时 endpoint 是否被排除
+                if temp_ep.id in exclude_ids:
                     logger.warning("临时 endpoint 被排除")
                     return None
+
+                # 修复：检查临时 endpoint 是否在失败队列中
+                if self.failure_queue and temp_ep.id in self.failure_queue.failed_endpoints:
+                    logger.warning(f"临时 endpoint {temp_ep.id} 在失败队列中，跳过")
+                    return None
+
+                # 修复：检查临时 endpoint 的断路器状态
+                if self.circuit_breaker and self.circuit_breaker.is_open(temp_ep.id):
+                    logger.warning(f"临时 endpoint {temp_ep.id} 断路器已打开，跳过")
+                    return None
+
+                logger.debug(f"从默认配置创建临时 endpoint: {temp_ep.id}")
+                return temp_ep
 
         logger.error("无法选择 endpoint：没有负载均衡器或配置管理器")
         return None
 
+    def _get_endpoint_by_id(self, endpoint_id: str):
+        """根据 ID 获取 endpoint
+
+        Args:
+            endpoint_id: Endpoint ID
+
+        Returns:
+            匹配的 endpoint，如果未找到返回 None
+        """
+        if not self.config_manager:
+            return None
+
+        # 获取所有 endpoint（包括不健康的）
+        all_endpoints = self._get_all_endpoints()
+        for ep in all_endpoints:
+            if ep.id == endpoint_id:
+                return ep
+
+        return None
+
     def _get_active_endpoints(self):
-        """获取当前活跃配置的所有健康 endpoint"""
+        """获取当前活跃配置的所有健康 endpoint（排除失败队列中的节点）
+
+        降级策略：
+        1. 优先返回 healthy 的 endpoint
+        2. 如果没有 healthy，返回 degraded 的 endpoint
+        3. 如果也没有 degraded，返回 unhealthy 但不在失败队列的 endpoint
+        """
         endpoints = []
         if not self.config_manager:
             logger.warning("没有 config_manager，无法获取 endpoints")
@@ -379,14 +519,53 @@ class ProxyServer:
             profile = self.config_manager.get_profile(self.cluster_name)
             if profile and hasattr(profile, 'endpoints') and profile.endpoints:
                 total_count = len(profile.endpoints)
-                # 只返回启用且健康的 endpoint
-                endpoints = [
-                    ep for ep in profile.endpoints
-                    if ep.enabled and ep.is_healthy()
-                ]
-                logger.info(f"集群 '{self.cluster_name}': 总 {total_count} 个 endpoint, 健康 {len(endpoints)} 个")
+
+                # 分类 endpoint
+                healthy_endpoints = []
+                degraded_endpoints = []
+                unhealthy_endpoints = []
+                circuit_open_endpoints = []  # 断路器打开的节点
+
                 for ep in profile.endpoints:
-                    logger.debug(f"  Endpoint {ep.id}: enabled={ep.enabled}, healthy={ep.is_healthy()}, status={ep.health_status}")
+                    if not ep.enabled:
+                        continue
+                    # 排除失败队列中的节点
+                    if self.failure_queue and ep.id in self.failure_queue.failed_endpoints:
+                        continue
+
+                    # 检查断路器状态
+                    if self.circuit_breaker and self.circuit_breaker.is_open(ep.id):
+                        circuit_open_endpoints.append(ep)
+                        continue
+
+                    status = ep.health_status.get('status', 'unknown')
+                    if status == 'healthy' or ep.is_healthy():
+                        healthy_endpoints.append(ep)
+                    elif status == 'degraded':
+                        degraded_endpoints.append(ep)
+                    else:
+                        unhealthy_endpoints.append(ep)
+
+                # 降级策略：healthy > degraded > unhealthy > circuit_open（极端情况）
+                if healthy_endpoints:
+                    endpoints = healthy_endpoints
+                    logger.info(f"集群 '{self.cluster_name}': 使用 {len(endpoints)} 个健康 endpoint")
+                elif degraded_endpoints:
+                    endpoints = degraded_endpoints
+                    logger.warning(f"集群 '{self.cluster_name}': 没有健康 endpoint，降级使用 {len(endpoints)} 个 degraded endpoint")
+                elif unhealthy_endpoints:
+                    endpoints = unhealthy_endpoints
+                    logger.warning(f"集群 '{self.cluster_name}': 没有健康/降级 endpoint，最后尝试 {len(endpoints)} 个 unhealthy endpoint")
+                elif circuit_open_endpoints:
+                    # 极端情况：只剩下断路器打开的节点，强制使用（is_open 会检查超时并自动恢复）
+                    endpoints = circuit_open_endpoints
+                    logger.error(f"集群 '{self.cluster_name}': 所有节点都不可用，强制尝试 {len(endpoints)} 个断路器打开的 endpoint")
+
+                failed_count = sum(1 for ep in profile.endpoints if self.failure_queue and ep.id in self.failure_queue.failed_endpoints)
+                logger.info(f"集群 '{self.cluster_name}': 总 {total_count} 个 endpoint, 健康 {len(healthy_endpoints)} 个, 降级 {len(degraded_endpoints)} 个, 失败队列 {failed_count} 个")
+                for ep in profile.endpoints:
+                    in_failure_queue = self.failure_queue and ep.id in self.failure_queue.failed_endpoints
+                    logger.debug(f"  Endpoint {ep.id}: enabled={ep.enabled}, healthy={ep.is_healthy()}, status={ep.health_status}, in_failure_queue={in_failure_queue}")
                 return endpoints
             else:
                 logger.warning(f"集群配置 '{self.cluster_name}' 没有 endpoints")
@@ -408,17 +587,56 @@ class ProxyServer:
             logger.warning("没有可用的配置")
             return endpoints
 
-        # 获取配置的 endpoints
+        # 获取配置的 endpoints（使用降级策略）
         if hasattr(profile, 'endpoints') and profile.endpoints:
             total_count = len(profile.endpoints)
-            # 只返回启用且健康的 endpoint
-            endpoints = [
-                ep for ep in profile.endpoints
-                if ep.enabled and ep.is_healthy()
-            ]
-            logger.info(f"配置 '{profile.name}': 总 {total_count} 个 endpoint, 健康 {len(endpoints)} 个")
+
+            # 分类 endpoint
+            healthy_endpoints = []
+            degraded_endpoints = []
+            unhealthy_endpoints = []
+            circuit_open_endpoints = []  # 断路器打开的节点
+
             for ep in profile.endpoints:
-                logger.debug(f"  Endpoint {ep.id}: enabled={ep.enabled}, healthy={ep.is_healthy()}, status={ep.health_status}")
+                if not ep.enabled:
+                    continue
+                # 排除失败队列中的节点
+                if self.failure_queue and ep.id in self.failure_queue.failed_endpoints:
+                    continue
+
+                # 检查断路器状态
+                if self.circuit_breaker and self.circuit_breaker.is_open(ep.id):
+                    circuit_open_endpoints.append(ep)
+                    continue
+
+                status = ep.health_status.get('status', 'unknown')
+                if status == 'healthy' or ep.is_healthy():
+                    healthy_endpoints.append(ep)
+                elif status == 'degraded':
+                    degraded_endpoints.append(ep)
+                else:
+                    unhealthy_endpoints.append(ep)
+
+            # 降级策略：healthy > degraded > unhealthy > circuit_open（极端情况）
+            if healthy_endpoints:
+                endpoints = healthy_endpoints
+                logger.info(f"配置 '{profile.name}': 使用 {len(endpoints)} 个健康 endpoint")
+            elif degraded_endpoints:
+                endpoints = degraded_endpoints
+                logger.warning(f"配置 '{profile.name}': 没有健康 endpoint，降级使用 {len(endpoints)} 个 degraded endpoint")
+            elif unhealthy_endpoints:
+                endpoints = unhealthy_endpoints
+                logger.warning(f"配置 '{profile.name}': 没有健康/降级 endpoint，最后尝试 {len(endpoints)} 个 unhealthy endpoint")
+            elif circuit_open_endpoints:
+                # 极端情况：只剩下断路器打开的节点，强制使用（is_open 会检查超时并自动恢复）
+                endpoints = circuit_open_endpoints
+                logger.error(f"配置 '{profile.name}': 所有节点都不可用，强制尝试 {len(endpoints)} 个断路器打开的 endpoint")
+
+            failed_count = sum(1 for ep in profile.endpoints if self.failure_queue and ep.id in self.failure_queue.failed_endpoints)
+            logger.info(f"配置 '{profile.name}': 总 {total_count} 个 endpoint, 健康 {len(healthy_endpoints)} 个, 降级 {len(degraded_endpoints)} 个, 失败队列 {failed_count} 个")
+            for ep in profile.endpoints:
+                in_failure_queue = self.failure_queue and ep.id in self.failure_queue.failed_endpoints
+                logger.debug(f"  Endpoint {ep.id}: enabled={ep.enabled}, healthy={ep.is_healthy()}, status={ep.health_status}, in_failure_queue={in_failure_queue}")
         else:
             logger.debug(f"配置 '{profile.name}' 没有 endpoints 属性")
 
@@ -486,29 +704,29 @@ class ProxyServer:
         Returns:
             代理响应，失败返回 None
         """
-        # 检查 session 是否存在且未关闭
-        if not self.client_session or self.client_session.closed:
-            # 如果旧 session 存在但已关闭，先清理
-            if self.client_session:
+        # 检查 HTTP 客户端是否存在
+        if not self.http_client or self.http_client.is_closed:
+            # 如果旧客户端存在但已关闭，先清理
+            if self.http_client:
                 try:
-                    await self.client_session.close()
+                    await self.http_client.aclose()
                 except:
                     pass
 
-            # 创建新的 session，配置连接池避免连接问题
-            from aiohttp import TCPConnector
-            self.client_session = ClientSession(
-                timeout=ClientTimeout(total=300),  # 总超时 5 分钟
-                connector=TCPConnector(
-                    limit=100,  # 最大连接数
-                    limit_per_host=10,  # 每个主机最大连接数（降低以避免复用冲突）
-                    ttl_dns_cache=300,  # DNS 缓存 5 分钟
-                    force_close=True,  # 不复用连接，避免 "closing transport" 错误
-                    enable_cleanup_closed=True  # 自动清理关闭的连接
-                    # 注意：force_close=True 时不能设置 keepalive_timeout
-                )
+            # 创建新的 httpx.AsyncClient
+            # httpx 在代理场景下比 aiohttp 更稳定（很多 claude-code-proxy 都在用）
+            # 参考：https://www.python-httpx.org/advanced/#pool-limit-configuration
+            self.http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(300.0, connect=60.0),  # 总超时 5 分钟，连接超时 1 分钟
+                limits=httpx.Limits(
+                    max_connections=100,        # 总连接数
+                    max_keepalive_connections=20,  # 保持连接数（httpx 自动管理复用）
+                    keepalive_expiry=30.0       # 连接保持 30 秒后过期
+                ),
+                follow_redirects=False,  # 不自动跟随重定向
+                http2=False              # 暂不启用 HTTP/2（可选）
             )
-            logger.debug(f"[{request_id}] 创建新的 ClientSession (force_close=True)")
+            logger.debug(f"[{request_id}] 创建新的 httpx.AsyncClient")
 
         try:
             # 构建目标 URL
@@ -544,162 +762,162 @@ class ProxyServer:
             # 记录请求开始时间
             start_time = datetime.now()
 
-            # 发送请求
-            async with self.client_session.request(
+            # 发送请求（使用 httpx）
+            response = await self.http_client.request(
                 method=method,
                 url=target_url,
                 headers=forward_headers,
-                data=body,
-                timeout=ClientTimeout(total=300, sock_read=60)  # 总超时 5 分钟，读取超时 1 分钟
-            ) as response:
-                # 检查是否为流式响应
-                is_streaming = (
-                    response.headers.get('Content-Type', '').startswith('text/event-stream') or
-                    response.headers.get('Transfer-Encoding') == 'chunked' or
-                    'stream' in response.headers.get('Content-Type', '').lower()
+                content=body
+            )
+
+            # 检查是否为流式响应
+            is_streaming = (
+                response.headers.get('Content-Type', '').startswith('text/event-stream') or
+                response.headers.get('Transfer-Encoding') == 'chunked' or
+                'stream' in response.headers.get('Content-Type', '').lower()
+            )
+
+            if is_streaming and original_request:
+                # 流式响应：创建 StreamResponse 并逐块转发
+                proxy_response = web.StreamResponse(
+                    status=response.status_code,
+                    headers=dict(response.headers)
                 )
+                await proxy_response.prepare(original_request)
 
-                if is_streaming and original_request:
-                    # 流式响应：创建 StreamResponse 并逐块转发
-                    proxy_response = web.StreamResponse(
-                        status=response.status,
-                        headers=dict(response.headers)
-                    )
-                    await proxy_response.prepare(original_request)
+                try:
+                    # 逐块读取并转发（httpx 使用 aiter_bytes）
+                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                        await proxy_response.write(chunk)
 
-                    try:
-                        # 逐块读取并转发
-                        async for chunk in response.content.iter_chunked(8192):
-                            await proxy_response.write(chunk)
-
-                        await proxy_response.write_eof()
-
-                        # 计算响应时间
-                        response_time = (datetime.now() - start_time).total_seconds() * 1000
-
-                        # 更新 endpoint 健康状态
-                        await endpoint.update_health_status(
-                            status='healthy',
-                            increment_requests=True,
-                            is_failure=False,
-                            response_time=response_time
-                        )
-
-                        logger.info(
-                            f"[{request_id}] ✓ 流式响应完成: HTTP {response.status}, "
-                            f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}"
-                        )
-
-                        return proxy_response
-
-                    except Exception as stream_error:
-                        # 流式传输过程中出错
-                        logger.warning(
-                            f"[{request_id}] ⚠ 流式传输中断: {str(stream_error)}, "
-                            f"endpoint: {endpoint.id}"
-                        )
-                        # 尝试结束响应
-                        try:
-                            await proxy_response.write_eof()
-                        except:
-                            pass
-                        # 返回 None，让上层重试
-                        return None
-                else:
-                    # 非流式响应：一次性读取
-                    response_body = await response.read()
+                    await proxy_response.write_eof()
 
                     # 计算响应时间
                     response_time = (datetime.now() - start_time).total_seconds() * 1000
 
-                    # 检查状态码，只有 200 才算成功
-                    is_success = response.status == 200
-
                     # 更新 endpoint 健康状态
-                    if is_success:
-                        await endpoint.update_health_status(
-                            status='healthy',
-                            increment_requests=True,
-                            is_failure=False,
-                            response_time=response_time
-                        )
-                        # 记录成功响应的部分信息
-                        try:
-                            response_json = json.loads(response_body.decode('utf-8'))
-                            response_model = response_json.get('model', 'N/A')
-                            usage = response_json.get('usage', {})
-                            input_tokens = usage.get('input_tokens', 0)
-                            output_tokens = usage.get('output_tokens', 0)
-                            logger.info(
-                                f"[{request_id}] ✓ 响应成功: HTTP {response.status}, "
-                                f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
-                                f"模型: {response_model}, "
-                                f"tokens: {input_tokens} in / {output_tokens} out"
-                            )
-                        except:
-                            logger.info(
-                                f"[{request_id}] ✓ 响应成功: HTTP {response.status}, "
-                                f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}"
-                            )
-                    else:
-                        error_msg = f"HTTP {response.status}"
-                        # 尝试解析错误详情
-                        try:
-                            error_body = response_body.decode('utf-8')
-                            # 记录完整的错误信息到日志
-                            if len(error_body) < 500:
-                                error_msg = f"HTTP {response.status}: {error_body}"
-                                logger.error(
-                                    f"[{request_id}] ✗ 响应失败: HTTP {response.status}, "
-                                    f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
-                                    f"错误: {error_body}"
-                                )
-                            else:
-                                # 错误信息过长，截断记录
-                                error_msg = f"HTTP {response.status}: {error_body[:500]}..."
-                                logger.error(
-                                    f"[{request_id}] ✗ 响应失败: HTTP {response.status}, "
-                                    f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
-                                    f"错误: {error_body[:500]}..."
-                                )
-                        except Exception as e:
-                            logger.error(
-                                f"[{request_id}] ✗ 响应失败: HTTP {response.status}, "
-                                f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
-                                f"无法解析错误信息: {e}"
-                            )
+                    await endpoint.update_health_status(
+                        status='healthy',
+                        increment_requests=True,
+                        is_failure=False,
+                        response_time=response_time
+                    )
 
-                        await endpoint.update_health_status(
-                            status='unhealthy',
-                            increment_requests=True,
-                            is_failure=True,
-                            response_time=response_time,
-                            error_message=error_msg
-                        )
-                        # 将失败的 endpoint 加入验证队列
-                        if self.failure_queue:
-                            await self.failure_queue.add_failed_endpoint(
-                                endpoint.id,
-                                error_msg
-                            )
-
-                    # 构建代理响应
-                    # 注意：aiohttp 会自动解压响应体，所以需要移除压缩相关的响应头
-                    response_headers = dict(response.headers)
-                    # 移除压缩相关的头，避免客户端尝试再次解压
-                    response_headers.pop('Content-Encoding', None)
-                    response_headers.pop('Content-Length', None)  # 长度已变化
-
-                    proxy_response = web.Response(
-                        status=response.status,
-                        body=response_body,
-                        headers=response_headers
+                    logger.info(
+                        f"[{request_id}] ✓ 流式响应完成: HTTP {response.status_code}, "
+                        f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}"
                     )
 
                     return proxy_response
 
-        except asyncio.TimeoutError:
-            error_msg = f"请求超时 (>{endpoint.timeout}s)"
+                except Exception as stream_error:
+                    # 流式传输过程中出错
+                    logger.warning(
+                        f"[{request_id}] ⚠ 流式传输中断: {str(stream_error)}, "
+                        f"endpoint: {endpoint.id}"
+                    )
+                    # 尝试结束响应
+                    try:
+                        await proxy_response.write_eof()
+                    except:
+                        pass
+                    # 返回 None，让上层重试
+                    return None
+            else:
+                # 非流式响应：一次性读取（httpx 的 content 已经是 bytes）
+                response_body = response.content
+
+                # 计算响应时间
+                response_time = (datetime.now() - start_time).total_seconds() * 1000
+
+                # 检查状态码，只有 200 才算成功
+                is_success = response.status_code == 200
+
+                # 更新 endpoint 健康状态
+                if is_success:
+                    await endpoint.update_health_status(
+                        status='healthy',
+                        increment_requests=True,
+                        is_failure=False,
+                        response_time=response_time
+                    )
+                    # 记录成功响应的部分信息
+                    try:
+                        response_json = json.loads(response_body.decode('utf-8'))
+                        response_model = response_json.get('model', 'N/A')
+                        usage = response_json.get('usage', {})
+                        input_tokens = usage.get('input_tokens', 0)
+                        output_tokens = usage.get('output_tokens', 0)
+                        logger.info(
+                            f"[{request_id}] ✓ 响应成功: HTTP {response.status_code}, "
+                            f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
+                            f"模型: {response_model}, "
+                            f"tokens: {input_tokens} in / {output_tokens} out"
+                        )
+                    except:
+                        logger.info(
+                            f"[{request_id}] ✓ 响应成功: HTTP {response.status_code}, "
+                            f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}"
+                        )
+                else:
+                    error_msg = f"HTTP {response.status_code}"
+                    # 尝试解析错误详情
+                    try:
+                        error_body = response_body.decode('utf-8')
+                        # 记录完整的错误信息到日志
+                        if len(error_body) < 500:
+                            error_msg = f"HTTP {response.status_code}: {error_body}"
+                            logger.error(
+                                f"[{request_id}] ✗ 响应失败: HTTP {response.status_code}, "
+                                f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
+                                f"错误: {error_body}"
+                            )
+                        else:
+                            # 错误信息过长，截断记录
+                            error_msg = f"HTTP {response.status_code}: {error_body[:500]}..."
+                            logger.error(
+                                f"[{request_id}] ✗ 响应失败: HTTP {response.status_code}, "
+                                f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
+                                f"错误: {error_body[:500]}..."
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"[{request_id}] ✗ 响应失败: HTTP {response.status_code}, "
+                            f"耗时: {response_time:.2f}ms, endpoint: {endpoint.id}, "
+                            f"无法解析错误信息: {e}"
+                        )
+
+                    await endpoint.update_health_status(
+                        status='unhealthy',
+                        increment_requests=True,
+                        is_failure=True,
+                        response_time=response_time,
+                        error_message=error_msg
+                    )
+                    # 将失败的 endpoint 加入验证队列
+                    if self.failure_queue:
+                        await self.failure_queue.add_failed_endpoint(
+                            endpoint.id,
+                            error_msg
+                        )
+
+                # 构建代理响应
+                # httpx 会自动处理压缩，所以需要移除压缩相关的响应头
+                response_headers = dict(response.headers)
+                # 移除压缩相关的头，避免客户端尝试再次解压
+                response_headers.pop('Content-Encoding', None)
+                response_headers.pop('Content-Length', None)  # 长度已变化
+
+                proxy_response = web.Response(
+                    status=response.status_code,
+                    body=response_body,
+                    headers=response_headers
+                )
+
+                return proxy_response
+
+        except httpx.TimeoutException:
+            error_msg = f"请求超时"
             logger.error(
                 f"[{request_id}] ✗ {error_msg}, "
                 f"URL: {target_url}, endpoint: {endpoint.id}"
@@ -721,66 +939,115 @@ class ProxyServer:
 
         except Exception as e:
             error_str = str(e)
-            error_lower = error_str.lower()
 
-            # 定义暂时性网络错误（不应标记 endpoint 为失败）
-            transient_errors = [
-                'closing transport',
-                'cannot write',
-                'server disconnected',
-                'connection reset',
-                'broken pipe',
-                'connection aborted'
-            ]
+            # 使用错误分类器分析错误类型
+            error_type, action = ErrorClassifier.classify(error_str)
 
-            # 检查是否是暂时性网络错误
-            is_transient = any(err in error_lower for err in transient_errors)
+            logger.error(
+                f"[{request_id}] ✗ 错误类型: {error_type.value}, "
+                f"推荐操作: {action}, 错误: {error_str[:200]}"
+            )
 
-            if is_transient:
+            # 根据错误类型决定处理策略
+            if error_type == ErrorType.TRANSIENT:
+                # 暂时性错误：标记为降级状态，允许重试但记录问题
                 logger.warning(
-                    f"[{request_id}] ⚠ 检测到暂时性网络错误: {error_str}, "
+                    f"[{request_id}] ⚠ 暂时性网络错误, "
                     f"URL: {target_url}, endpoint: {endpoint.id}"
                 )
-                # 强制重置 session，下次请求会重新创建
-                if self.client_session:
+
+                # 强制重置 http_client，下次请求会重新创建
+                if self.http_client:
                     try:
-                        await self.client_session.close()
+                        await self.http_client.aclose()
                     except:
                         pass
-                    self.client_session = None
+                    self.http_client = None
 
-                # 暂时性错误不标记 endpoint 为失败，只增加请求计数
+                # 修复：暂时性错误也要更新健康状态为 degraded
                 await endpoint.update_health_status(
-                    status=None,  # 不改变健康状态
+                    status='degraded',  # 标记为降级而不是保持不变
                     increment_requests=True,
-                    is_failure=False,  # 不计入失败
-                    error_message=None
+                    is_failure=True,  # 计入失败统计
+                    error_message=f"暂时性错误: {error_str[:100]}"
                 )
+                return None  # 触发重试
 
-                # 返回 None 让上层重试逻辑处理
+            elif error_type == ErrorType.RATE_LIMIT:
+                # 限流：标记降级，可选择性重试
+                logger.warning(
+                    f"[{request_id}] ⚠ API 限流, "
+                    f"URL: {target_url}, endpoint: {endpoint.id}"
+                )
+                await endpoint.update_health_status(
+                    status='degraded',
+                    increment_requests=True,
+                    is_failure=True,
+                    error_message=f"API 限流: {error_str}"
+                )
+                # 断路器失败会在 handle_request 中统一记录
+                return None  # 切换到其他节点
+
+            elif error_type == ErrorType.AUTH:
+                # 认证失败：禁用 endpoint
+                logger.error(
+                    f"[{request_id}] ✗ 认证失败，禁用 endpoint: {endpoint.id}, "
+                    f"错误: {error_str}"
+                )
+                endpoint.enabled = False
+                await endpoint.update_health_status(
+                    status='unhealthy',
+                    increment_requests=True,
+                    is_failure=True,
+                    error_message=f"认证失败: {error_str}"
+                )
+                # 断路器失败会在 handle_request 中统一记录
                 return None
 
-            # 其他类型的错误才标记为失败
-            error_msg = f"请求失败: {error_str}"
-            logger.error(
-                f"[{request_id}] ✗ {error_msg}, "
-                f"URL: {target_url}, endpoint: {endpoint.id}",
-                exc_info=True  # 记录完整堆栈信息
-            )
-            await endpoint.update_health_status(
-                status='unhealthy',
-                increment_requests=True,
-                is_failure=True,
-                error_message=error_msg
-            )
-            # 将失败请求加入队列
-            if self.failure_queue:
-                # 将失败的 endpoint 加入验证队列
-                await self.failure_queue.add_failed_endpoint(
-                    endpoint.id,
-                    error_msg
+            elif error_type == ErrorType.PERMANENT:
+                # 永久失败：标记失败并切换
+                error_msg = f"永久性错误: {error_str}"
+                logger.error(
+                    f"[{request_id}] ✗ {error_msg}, "
+                    f"URL: {target_url}, endpoint: {endpoint.id}"
                 )
-            return None
+                await endpoint.update_health_status(
+                    status='unhealthy',
+                    increment_requests=True,
+                    is_failure=True,
+                    error_message=error_msg
+                )
+                # 断路器失败会在 handle_request 中统一记录
+                # 将失败请求加入队列
+                if self.failure_queue:
+                    await self.failure_queue.add_failed_endpoint(
+                        endpoint.id,
+                        error_msg
+                    )
+                return None
+
+            else:
+                # 未知错误：保守处理，标记失败
+                error_msg = f"未知错误: {error_str}"
+                logger.error(
+                    f"[{request_id}] ✗ {error_msg}, "
+                    f"URL: {target_url}, endpoint: {endpoint.id}",
+                    exc_info=True  # 记录完整堆栈信息
+                )
+                await endpoint.update_health_status(
+                    status='unhealthy',
+                    increment_requests=True,
+                    is_failure=True,
+                    error_message=error_msg
+                )
+                # 断路器失败会在 handle_request 中统一记录
+                # 将失败请求加入队列
+                if self.failure_queue:
+                    await self.failure_queue.add_failed_endpoint(
+                        endpoint.id,
+                        error_msg
+                    )
+                return None
 
     async def start(self):
         """启动代理服务器"""
@@ -842,6 +1109,14 @@ class ProxyServer:
                 logger.info("[OK] 失败队列处理器已启动")
                 print("[OK] 失败队列处理器已启动")
 
+            # 启动会话清理任务（后台任务）
+            if self.session_affinity:
+                self._session_cleanup_task = asyncio.create_task(
+                    self.session_affinity.start_cleanup_task(interval=300)
+                )
+                logger.info("[OK] 会话清理任务已启动 (每 5 分钟)")
+                print("[OK] 会话清理任务已启动")
+
             # 保持运行，等待关闭信号
             try:
                 if self._shutdown_event:
@@ -892,18 +1167,18 @@ class ProxyServer:
             # 强制取消所有任务
             await self._force_cancel_tasks()
 
-        # 关闭客户端会话
-        if self.client_session:
+        # 关闭 HTTP 客户端
+        if self.http_client:
             try:
-                if not self.client_session.closed:
-                    await self.client_session.close()
-                    logger.info("[OK] ClientSession 已关闭")
+                if not self.http_client.is_closed:
+                    await self.http_client.aclose()
+                    logger.info("[OK] httpx.AsyncClient 已关闭")
                 # 等待连接完全关闭
                 await asyncio.sleep(0.1)
             except Exception as e:
-                logger.warning(f"关闭 client session 时出错: {e}")
+                logger.warning(f"关闭 http_client 时出错: {e}")
             finally:
-                self.client_session = None
+                self.http_client = None
 
         # 清理 runner（site 已经在开始时停止了）
         if self.runner:
@@ -975,6 +1250,20 @@ class ProxyServer:
             except Exception as e:
                 logger.warning(f"停止健康监控器时出错: {e}")
 
+        # 停止会话清理任务
+        if self._session_cleanup_task:
+            try:
+                if not self._session_cleanup_task.done():
+                    self._session_cleanup_task.cancel()
+                    try:
+                        await asyncio.wait_for(self._session_cleanup_task, timeout=2)
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
+                self._session_cleanup_task = None
+                logger.info("[OK] 会话清理任务已停止")
+            except Exception as e:
+                logger.warning(f"停止会话清理任务时出错: {e}")
+
     async def _force_cancel_tasks(self):
         """强制取消所有后台任务（超时时使用）"""
         tasks_to_cancel = []
@@ -990,6 +1279,10 @@ class ProxyServer:
         if self._health_monitor_task and not self._health_monitor_task.done():
             tasks_to_cancel.append(self._health_monitor_task)
             self._health_monitor_task = None
+
+        if self._session_cleanup_task and not self._session_cleanup_task.done():
+            tasks_to_cancel.append(self._session_cleanup_task)
+            self._session_cleanup_task = None
 
         if tasks_to_cancel:
             logger.warning(f"强制取消 {len(tasks_to_cancel)} 个后台任务")

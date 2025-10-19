@@ -1,0 +1,35 @@
+.version-banner {
+  width: 100%;
+  overflow: hidden;
+  background: linear-gradient(90deg, #1890ff 0%, #096dd9 100%);
+  padding: 6px 0;
+  position: relative;
+}
+
+.version-banner-content {
+  display: flex;
+  white-space: nowrap;
+  animation: scroll-left 30s linear infinite;
+}
+
+.version-banner-text {
+  color: white !important;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0 50px;
+  display: inline-block;
+}
+
+@keyframes scroll-left {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+/* 鼠标悬停时暂停滚动 */
+.version-banner:hover .version-banner-content {
+  animation-play-state: paused;
+}

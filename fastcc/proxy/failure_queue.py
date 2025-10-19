@@ -23,7 +23,8 @@ class FailureQueue:
         self,
         storage_path: Optional[Path] = None,
         config_manager=None,
-        conversational_checker=None
+        conversational_checker=None,
+        circuit_breaker=None
     ):
         """初始化失败队列
 
@@ -31,10 +32,12 @@ class FailureQueue:
             storage_path: 队列持久化存储路径
             config_manager: 配置管理器（用于获取 endpoint）
             conversational_checker: 对话检查器（用于验证 endpoint）
+            circuit_breaker: 断路器实例（用于在恢复时重置断路器状态）
         """
         self.storage_path = storage_path or Path.home() / '.qcc' / 'failure_endpoints.json'
         self.config_manager = config_manager
         self.conversational_checker = conversational_checker
+        self.circuit_breaker = circuit_breaker  # 断路器引用
         self.running = False
 
         # 失败的 endpoint ID 集合
@@ -172,6 +175,12 @@ class FailureQueue:
                     is_failure=False,
                     response_time=check.response_time_ms
                 )
+
+                # 重置断路器状态（如果有断路器）
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_success(endpoint.id)
+                    logger.debug(f"重置断路器状态: {endpoint.id}")
+
                 await self.remove_endpoint(endpoint.id)
                 self.stats['total_recovered'] += 1
                 logger.info(

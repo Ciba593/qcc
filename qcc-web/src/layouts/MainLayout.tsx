@@ -13,8 +13,10 @@ import {
 import { Layout, Menu, Typography, theme, Tag, Space, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { api } from '../api/client';
+import HelpButton from '../components/HelpButton';
+import VersionBanner from '../components/VersionBanner';
 
-const { Header, Sider, Content } = Layout;
+const { Header, Sider, Content, Footer } = Layout;
 const { Title, Text } = Typography;
 
 type MenuItem = Required<MenuProps>['items'][number];
@@ -182,6 +184,7 @@ export default function MainLayout() {
             })()}
           </Space>
         </Header>
+        <VersionBanner />
         <Content
           style={{
             margin: '24px 16px',
@@ -194,7 +197,21 @@ export default function MainLayout() {
         >
           <Outlet />
         </Content>
+        <Footer
+          style={{
+            textAlign: 'center',
+            padding: '16px 50px',
+            background: colorBgContainer,
+            borderTop: '1px solid #f0f0f0',
+            flexShrink: 0,
+          }}
+        >
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Powered by @yxhpy
+          </Text>
+        </Footer>
       </Layout>
+      <HelpButton />
     </Layout>
   );
 }

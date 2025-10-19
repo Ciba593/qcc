@@ -3016,6 +3016,10 @@ def start(host, port, dev, no_browser):
         from datetime import datetime
         import signal
         import atexit
+        import platform
+
+        # Windows平台检测
+        is_windows = platform.system() == 'Windows'
 
         print_header("QCC Web UI")
 
@@ -3071,7 +3075,8 @@ def start(host, port, dev, no_browser):
                     ['npm', 'install'],
                     cwd=str(web_dir),
                     capture_output=True,
-                    text=True
+                    text=True,
+                    shell=is_windows  # Windows需要shell=True来执行.cmd文件
                 )
                 if result.returncode != 0:
                     print_status(f"安装依赖失败: {result.stderr}", "error")
@@ -3080,13 +3085,20 @@ def start(host, port, dev, no_browser):
 
             # 启动前端开发服务器
             print_status("启动前端开发服务器 (Vite)", "info")
+
+            # 设置环境变量，传递后端API地址
+            vite_env = os.environ.copy()
+            vite_env['VITE_API_URL'] = f'http://{host}:{port}'
+
             vite_process = subprocess.Popen(
                 ['npm', 'run', 'dev'],
                 cwd=str(web_dir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                env=vite_env,  # 传递环境变量
+                shell=is_windows  # Windows需要shell=True来执行.cmd文件
             )
 
             # 写入PID文件（包含前端进程）

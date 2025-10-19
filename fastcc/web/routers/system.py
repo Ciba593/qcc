@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from ..models import ApiResponse
 from fastcc.core.config import ConfigManager
 from fastcc.core.models import get_all_models_dict
+from fastcc import __version__, __description__
 
 router = APIRouter()
 
@@ -32,6 +33,31 @@ class ModelConfigRequest(BaseModel):
 
 
 # ============= API 路由 =============
+
+@router.get("/version")
+async def get_version():
+    """获取系统版本信息"""
+    try:
+        return ApiResponse(
+            success=True,
+            data={
+                'version': __version__,
+                'description': __description__,
+                'features': [
+                    '✨ 多 Endpoint 代理服务',
+                    '⚡ 智能负载均衡',
+                    '🔄 自动故障转移',
+                    '📊 实时健康监控',
+                    '🎯 配置热更新',
+                ]
+            }
+        )
+    except Exception as e:
+        return ApiResponse(
+            success=False,
+            message=f"获取版本信息失败: {str(e)}"
+        )
+
 
 @router.get("/models")
 async def get_available_models():
