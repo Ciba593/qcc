@@ -1,7 +1,11 @@
 import axios from 'axios';
 
 // API 基础 URL
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8080';
+// 生产模式：使用当前页面的 origin（前后端同源）
+// 开发模式：使用环境变量或默认值（通过 vite proxy 转发）
+const BASE_URL = import.meta.env.PROD
+  ? window.location.origin  // 生产模式：使用当前页面地址
+  : (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8080');  // 开发模式：使用代理
 
 // 创建 axios 实例
 export const apiClient = axios.create({
