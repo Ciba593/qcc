@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 import os
 from pathlib import Path
 
-from .routers import configs, endpoints, priority, health, proxy, queue, dashboard, claude_config
+from .routers import configs, endpoints, priority, health, proxy, queue, dashboard, claude_config, system
 from .routers.health import set_health_dependencies
 from fastcc.core.config import ConfigManager
 from fastcc.proxy.health_monitor import HealthMonitor
@@ -48,6 +48,10 @@ async def startup_event():
     # 设置健康监控依赖
     set_health_dependencies(config_manager, health_monitor)
 
+    # 设置系统配置管理器
+    from .routers import system as system_router
+    system_router.set_config_manager(config_manager)
+
 # 注册 API 路由
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 app.include_router(configs.router, prefix="/api/configs", tags=["Configs"])
@@ -57,6 +61,7 @@ app.include_router(health.router, prefix="/api/health", tags=["Health"])
 app.include_router(proxy.router, prefix="/api/proxy", tags=["Proxy"])
 app.include_router(queue.router, prefix="/api/queue", tags=["Queue"])
 app.include_router(claude_config.router, prefix="/api/claude-config", tags=["Claude Config"])
+app.include_router(system.router, prefix="/api/system", tags=["System"])
 
 # 静态文件服务 (前端构建文件)
 static_dir = Path(__file__).parent / "static"
@@ -71,17 +76,29 @@ if static_dir.exists():
             return FileResponse(str(index_file))
         return {"message": "QCC Web API is running. Frontend not built yet."}
 
-    @app.get("/{full_path:path}")
-    async def serve_spa_routes(full_path: str):
-        """处理前端路由,返回 index.html"""
-        # API 路径不处理
-        if full_path.startswith("api/"):
-            return {"error": "Not found"}
+    # 使用 exception handler 处理 404，返回 SPA 页面
+    from fastapi import Request, status
+    from fastapi.responses import JSONResponse
+    from fastapi.exceptions import HTTPException
 
+    @app.exception_handler(404)
+    async def custom_404_handler(request: Request, exc: HTTPException):
+        """处理 404 错误：API 返回 JSON，前端路由返回 SPA"""
+        # API 路径返回 JSON 错误
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "Not found"}
+            )
+
+        # 前端路由返回 index.html
         index_file = static_dir / "index.html"
         if index_file.exists():
             return FileResponse(str(index_file))
-        return {"error": "Not found"}
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Not found"}
+        )
 else:
     @app.get("/")
     async def root():

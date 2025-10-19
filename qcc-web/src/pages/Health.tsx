@@ -20,6 +20,7 @@ import {
   Modal,
   Select,
   Typography,
+  App,
 } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -81,6 +82,7 @@ interface RuntimeData {
 }
 
 export default function Health() {
+  const { modal } = App.useApp();
   const queryClient = useQueryClient();
   const [addNodeModalVisible, setAddNodeModalVisible] = useState(false);
   const [selectedNodeType, setSelectedNodeType] = useState<'primary' | 'secondary'>('primary');
@@ -165,7 +167,9 @@ export default function Health() {
   if (isLoading) {
     return (
       <div style={{ textAlign: 'center', padding: '50px' }}>
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large">
+          <div style={{ paddingTop: 50 }}>加载中...</div>
+        </Spin>
       </div>
     );
   }
@@ -279,15 +283,23 @@ export default function Health() {
       icon: <DeleteOutlined />,
       danger: true,
       onClick: () => {
-        Modal.confirm({
+        modal.confirm({
           title: '确认删除节点',
           content: `确定要从当前 EndpointGroup 中删除节点 ${node.config_name} 吗？`,
           okText: '删除',
           cancelText: '取消',
           okButtonProps: { danger: true },
-          onOk: () => removeNodeMutation.mutate({
-            config_name: node.config_name
-          }),
+          onOk: () => {
+            return new Promise<void>((resolve, reject) => {
+              removeNodeMutation.mutate(
+                { config_name: node.config_name },
+                {
+                  onSuccess: () => resolve(),
+                  onError: () => reject(),
+                }
+              );
+            });
+          },
         });
       },
     });

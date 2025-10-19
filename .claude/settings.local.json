@@ -3,7 +3,8 @@
     "allow": [
       "Bash(printf:*)",
       "Bash(uvx:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

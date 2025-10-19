@@ -45,6 +45,11 @@ const menuItems: MenuItem[] = [
     icon: <HeartOutlined />,
     label: '健康监控',
   },
+  {
+    key: '/settings',
+    icon: <SettingOutlined />,
+    label: '系统配置',
+  },
 ];
 
 export default function MainLayout() {

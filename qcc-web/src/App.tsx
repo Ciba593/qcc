@@ -8,6 +8,7 @@ import Configs from './pages/Configs';
 import Endpoints from './pages/Endpoints';
 import Proxy from './pages/Proxy';
 import Health from './pages/Health';
+import Settings from './pages/Settings';
 import './App.css';
 
 // 创建 React Query 客户端
@@ -42,6 +43,7 @@ function App() {
                 <Route path="endpoints" element={<Endpoints />} />
                 <Route path="proxy" element={<Proxy />} />
                 <Route path="health" element={<Health />} />
+                <Route path="settings" element={<Settings />} />
                 <Route path="*" element={<Navigate to="/dashboard" replace />} />
               </Route>
             </Routes>

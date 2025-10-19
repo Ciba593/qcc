@@ -28,7 +28,9 @@ class HealthMonitor:
         self,
         check_interval: int = 60,
         enable_weight_adjustment: bool = True,
-        min_checks_before_adjustment: int = 3
+        min_checks_before_adjustment: int = 3,
+        test_model: Optional[str] = None,
+        config_manager = None
     ):
         """初始化健康监控器
 
@@ -36,6 +38,8 @@ class HealthMonitor:
             check_interval: 检查间隔（秒）
             enable_weight_adjustment: 是否启用动态权重调整
             min_checks_before_adjustment: 调整权重前的最少检查次数
+            test_model: 用于健康检查的模型
+            config_manager: 配置管理器，用于动态读取模型配置
         """
         self.check_interval = check_interval
         self.enable_weight_adjustment = enable_weight_adjustment
@@ -43,7 +47,10 @@ class HealthMonitor:
         self.running = False
 
         # 核心组件
-        self.conversational_checker = ConversationalHealthChecker()
+        self.conversational_checker = ConversationalHealthChecker(
+            test_model=test_model,
+            config_manager=config_manager
+        )
         self.weight_adjuster = DynamicWeightAdjuster()
         self.performance_metrics: Dict[str, PerformanceMetrics] = {}
 
@@ -83,6 +90,9 @@ class HealthMonitor:
     async def stop(self):
         """停止健康监控"""
         self.running = False
+        # 关闭 conversational_checker 的 session
+        if self.conversational_checker:
+            await self.conversational_checker.close()
         logger.info("[OK] 健康监控器已停止")
 
     async def perform_health_check(self, endpoints: List):
@@ -221,6 +231,16 @@ class HealthMonitor:
         Args:
             endpoints: Endpoint 列表
         """
+        # 清理已删除 endpoint 的指标（防止内存泄漏）
+        active_endpoint_ids = {ep.id for ep in endpoints}
+        metrics_to_remove = [
+            ep_id for ep_id in self.performance_metrics.keys()
+            if ep_id not in active_endpoint_ids
+        ]
+        for ep_id in metrics_to_remove:
+            del self.performance_metrics[ep_id]
+            logger.debug(f"清理已删除 endpoint 的指标: {ep_id}")
+
         for endpoint in endpoints:
             metrics = self.performance_metrics.get(endpoint.id)
 

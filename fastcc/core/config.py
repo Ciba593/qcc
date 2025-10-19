@@ -118,11 +118,15 @@ class ConfigManager:
             'auto_sync': True,
             'encryption_enabled': True,
             'storage_backend_type': None,  # 记住用户选择的存储类型
-            'storage_initialized': False   # 标记是否已完成初始化
+            'storage_initialized': False,   # 标记是否已完成初始化
+            # 模型配置
+            'test_model': 'claude-3-5-haiku-20241022',  # 健康检查使用的模型（默认最便宜最快）
+            'proxy_model_mode': 'passthrough',  # 代理模型模式: passthrough(按实际) / override(强制替换)
+            'proxy_model_override': 'claude-3-5-sonnet-20241022'  # 强制替换时使用的模型
         }
         self.crypto_manager: Optional[CryptoManager] = None
         self.user_id: Optional[str] = None
-        
+
         # 加载本地缓存配置
         self._load_local_cache()
     

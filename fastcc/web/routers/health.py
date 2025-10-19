@@ -12,6 +12,7 @@ from fastcc.core.config import ConfigManager
 from fastcc.core.endpoint_group_manager import EndpointGroupManager
 from fastcc.proxy.health_monitor import HealthMonitor
 import json
+import asyncio
 from pathlib import Path
 
 router = APIRouter()
@@ -88,6 +89,97 @@ def get_proxy_server():
     return _proxy_server
 
 
+async def _reload_cluster_config_and_restart_proxy(cluster_name: str, config_manager: ConfigManager):
+    """重新加载集群配置并重启代理服务器
+
+    当 EndpointGroup 的配置发生变化时，需要：
+    1. 重新生成临时的 ConfigProfile
+    2. 重启代理服务器以应用新配置
+
+    Args:
+        cluster_name: 集群名称
+        config_manager: 配置管理器
+    """
+    import psutil
+    import subprocess
+    import sys
+    import os
+    import logging
+
+    print(f"\n{'='*60}")
+    print(f"[代理重启] 开始重新加载集群配置: {cluster_name}")
+    print(f"{'='*60}")
+
+    # 检查代理服务器是否正在运行
+    pid_file = Path.home() / '.fastcc' / 'proxy.pid'
+    if not pid_file.exists():
+        # 代理未运行，无需重启
+        print(f"[代理重启] 代理服务器未运行，无需重启")
+        print(f"{'='*60}\n")
+        return
+
+    try:
+        with open(pid_file, 'r') as f:
+            pid_data = json.loads(f.read().strip())
+            pid = pid_data['pid']
+            host = pid_data.get('host', '127.0.0.1')
+            port = pid_data.get('port', 7860)
+            current_cluster = pid_data.get('cluster_name')
+
+        print(f"[代理重启] 当前运行集群: {current_cluster}")
+        print(f"[代理重启] 修改的集群: {cluster_name}")
+
+        # 只有当前运行的集群与修改的集群一致时才重启
+        if current_cluster != cluster_name:
+            print(f"[代理重启] 集群不匹配，跳过重启")
+            print(f"{'='*60}\n")
+            return
+
+        # 停止旧的代理服务器
+        if psutil.pid_exists(pid):
+            print(f"[代理重启] 正在停止代理服务器 (PID: {pid})")
+            process = psutil.Process(pid)
+            process.terminate()
+            # 等待进程结束
+            import asyncio
+            await asyncio.sleep(1)
+            print(f"[代理重启] 已停止旧的代理服务器 (PID: {pid})")
+
+        # 启动新的代理服务器
+        cmd = [
+            sys.executable, "-m", "fastcc.cli",
+            "proxy", "start",
+            "--host", host,
+            "--port", str(port),
+            "--cluster", cluster_name
+        ]
+
+        print(f"[代理重启] 正在启动新的代理服务器")
+        print(f"[代理重启] 命令: {' '.join(cmd)}")
+
+        log_dir = Path.home() / ".fastcc"
+        log_file = log_dir / "proxy_web.log"
+
+        with open(log_file, 'a') as f:
+            subprocess.Popen(
+                cmd,
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
+
+        # 等待新进程启动
+        await asyncio.sleep(2)
+        print(f"[代理重启] 成功重启代理服务器")
+        print(f"{'='*60}\n")
+
+    except Exception as e:
+        print(f"[代理重启] 失败: {e}")
+        print(f"{'='*60}\n")
+        import traceback
+        traceback.print_exc()
+
+
 @router.get("/status")
 async def get_health_status(
     config_manager: ConfigManager = Depends(get_config_manager)
@@ -124,8 +216,13 @@ async def get_health_status(
                 proxy_port = pid_data.get('port', 7860)
                 proxy_stats_url = f"http://{proxy_host}:{proxy_port}/__qcc__/stats"
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(proxy_stats_url, timeout=aiohttp.ClientTimeout(total=2)) as response:
+                # 使用 connector_owner=False 避免连接池问题
+                connector = aiohttp.TCPConnector(limit=10, force_close=True)
+                async with aiohttp.ClientSession(connector=connector) as session:
+                    async with session.get(
+                        proxy_stats_url,
+                        timeout=aiohttp.ClientTimeout(total=3, connect=1)
+                    ) as response:
                         if response.status == 200:
                             stats = await response.json()
 
@@ -180,9 +277,17 @@ async def get_health_status(
                                     'endpoints': endpoint_status_list
                                 }
                             )
-            except Exception as e:
-                # 如果获取运行时数据失败，返回空数据
+            except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, OSError) as e:
+                # 如果获取运行时数据失败（代理重启、网络错误等），返回空数据
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug(f"无法从代理服务器获取健康状态: {e}")
                 pass
+            except Exception as e:
+                # 捕获其他未预期的异常
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"获取代理健康状态时发生异常: {e}")
 
         # 3. 代理未运行或获取失败，返回空数据
         return ApiResponse(
@@ -402,15 +507,25 @@ async def get_runtime_status(
 
         proxy_stats = {}
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(proxy_stats_url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            # 使用 force_close 避免连接池问题
+            connector = aiohttp.TCPConnector(limit=10, force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.get(
+                    proxy_stats_url,
+                    timeout=aiohttp.ClientTimeout(total=3, connect=1)
+                ) as resp:
                     if resp.status == 200:
                         proxy_stats = await resp.json()
-        except Exception as e:
-            # 如果无法获取统计数据，记录日志但继续
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, OSError) as e:
+            # 如果无法获取统计数据（代理重启、网络错误等），记录日志但继续
             import logging
             logger = logging.getLogger(__name__)
-            logger.warning(f"无法从代理服务器获取统计数据: {e}")
+            logger.debug(f"无法从代理服务器获取统计数据: {e}")
+        except Exception as e:
+            # 捕获其他未预期的异常
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"获取代理统计数据时发生异常: {e}")
 
         # 构建 endpoint 到实时状态的映射（同时使用 id 和 base_url）
         endpoints_runtime_map_by_id = {}
@@ -736,13 +851,16 @@ async def move_node(
                 profile = config_manager.get_profile(config_name)
                 if profile and profile.endpoints:
                     for endpoint in profile.endpoints:
-                        import asyncio
-                        asyncio.create_task(
-                            failure_queue.add_failed_endpoint(endpoint.id, "手动移动")
-                        )
+                        # 直接 await 而不是 create_task，避免任务泄漏
+                        await failure_queue.add_failed_endpoint(endpoint.id, "手动移动")
 
         # 保存更改
-        group_manager.save_group(group)
+        group_manager._save_local_cache()
+
+        # 重新加载集群配置并重启代理服务器
+        print(f"\n[调用] 即将调用重启函数，集群: {cluster_name}")
+        await _reload_cluster_config_and_restart_proxy(cluster_name, config_manager)
+        print(f"[调用] 重启函数调用完成\n")
 
         # 同步到远程
         if config_manager.settings.get('auto_sync'):
@@ -753,7 +871,7 @@ async def move_node(
 
         return ApiResponse(
             success=True,
-            message=f"成功将 {config_name} 移动到 {to_type}"
+            message=f"成功将 {config_name} 移动到 {to_type}，代理服务器已自动重启"
         )
 
     except HTTPException:
@@ -825,7 +943,12 @@ async def add_node(
             raise HTTPException(status_code=400, detail=f"无效的节点类型: {node_type}")
 
         # 保存更改
-        group_manager.save_group(group)
+        group_manager._save_local_cache()
+
+        # 重新加载集群配置并重启代理服务器
+        print(f"\n[调用] 即将调用重启函数，集群: {cluster_name}")
+        await _reload_cluster_config_and_restart_proxy(cluster_name, config_manager)
+        print(f"[调用] 重启函数调用完成\n")
 
         # 同步到远程
         if config_manager.settings.get('auto_sync'):
@@ -836,7 +959,7 @@ async def add_node(
 
         return ApiResponse(
             success=True,
-            message=f"成功将 {config_name} 添加到 {node_type}"
+            message=f"成功将 {config_name} 添加到 {node_type}，代理服务器已自动重启"
         )
 
     except HTTPException:
@@ -896,7 +1019,12 @@ async def remove_node(
             raise HTTPException(status_code=404, detail=f"节点 {config_name} 不在当前 EndpointGroup 中")
 
         # 保存更改
-        group_manager.save_group(group)
+        group_manager._save_local_cache()
+
+        # 重新加载集群配置并重启代理服务器
+        print(f"\n[调用] 即将调用重启函数，集群: {cluster_name}")
+        await _reload_cluster_config_and_restart_proxy(cluster_name, config_manager)
+        print(f"[调用] 重启函数调用完成\n")
 
         # 同步到远程
         if config_manager.settings.get('auto_sync'):
@@ -907,7 +1035,7 @@ async def remove_node(
 
         return ApiResponse(
             success=True,
-            message=f"成功从 EndpointGroup 中删除节点 {config_name}"
+            message=f"成功从 EndpointGroup 中删除节点 {config_name}，代理服务器已自动重启"
         )
 
     except HTTPException:

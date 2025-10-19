@@ -1146,7 +1146,8 @@ def proxy_start(host, port, cluster):
         health_monitor = HealthMonitor(
             check_interval=60,  # 每 60 秒检查一次
             enable_weight_adjustment=True,  # 启用动态权重调整
-            min_checks_before_adjustment=3  # 至少 3 次检查后才调整权重
+            min_checks_before_adjustment=3,  # 至少 3 次检查后才调整权重
+            config_manager=config_manager  # 传递配置管理器，支持热更新
         )
 
         # 初始化故障转移管理器
@@ -1159,7 +1160,7 @@ def proxy_start(host, port, cluster):
 
         # 初始化对话检查器（用于失败队列验证）
         from .proxy.conversational_checker import ConversationalHealthChecker
-        conversational_checker = ConversationalHealthChecker()
+        conversational_checker = ConversationalHealthChecker(config_manager=config_manager)
 
         # 初始化失败队列
         failure_queue = FailureQueue(
